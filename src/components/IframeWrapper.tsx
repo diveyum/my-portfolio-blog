@@ -8,8 +8,7 @@ export function IframeWrapper({ src, title }: { src: string; title: string }) {
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
       if (event.data.type === "resize" && event.data.height) {
-        // Add a 50px buffer to ensure no inner scrollbar triggers
-        setHeight(`${event.data.height + 50}px`);
+        setHeight(`${event.data.height}px`);
       }
     };
     window.addEventListener("message", handleMessage);

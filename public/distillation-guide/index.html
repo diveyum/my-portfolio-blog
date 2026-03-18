@@ -41,18 +41,18 @@
   
   function sendHeight() {
     try {
-      const height = document.documentElement.scrollHeight;
-      if (window.parent) {
+      // Ensure body doesn't stretch to fill iframe
+      document.body.style.height = 'auto';
+      const height = document.body.offsetHeight;
+      if (window.parent && window.parent !== window) {
         window.parent.postMessage({ type: 'resize', height: height }, '*');
       }
     } catch(e) {}
   }
 
   window.addEventListener('load', sendHeight);
-  window.addEventListener('resize', sendHeight);
   // Re-calculate after math and interactive elements load
-  setTimeout(sendHeight, 500);
-  setTimeout(sendHeight, 1500);
+  setTimeout(sendHeight, 1000);
   setTimeout(sendHeight, 3000);
   
   try {
@@ -64,12 +64,6 @@
       observer.observe(window.parent.document.documentElement, { attributes: true, attributeFilter: ['class'] });
     }
   } catch (e) {}
-  
-  // Observe body changes for dynamic expansions
-  const bodyObserver = new MutationObserver(sendHeight);
-  window.addEventListener('DOMContentLoaded', () => {
-    bodyObserver.observe(document.body, { childList: true, subtree: true, attributes: true });
-  });
 </script>
 
 <header>
