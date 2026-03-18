@@ -7,7 +7,7 @@ export const metadata = {
 
 export default function ModelDistillationGuide() {
   return (
-    <div className="w-full relative flex flex-col">
+    <div className="w-full relative flex flex-col -mt-12 sm:-mt-20">
       <IframeWrapper 
         src="/my-portfolio-blog/distillation-guide/index.html" 
         title="An Illustrated Guide to Model Distillation" 
