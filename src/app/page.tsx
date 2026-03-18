@@ -10,7 +10,7 @@ export default function Home() {
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
             <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-500"></span>
           </span>
-          Based in Gurugram, India
+          Available for new opportunities
         </div>
         
         <h1 className="text-5xl sm:text-7xl font-extrabold text-slate-900 dark:text-white tracking-tight leading-[1.1]">
@@ -27,7 +27,7 @@ export default function Home() {
             View Resume
           </Link>
           <Link href="/projects" className="inline-flex justify-center items-center px-8 py-4 bg-white dark:bg-slate-900 text-slate-900 dark:text-white border-2 border-slate-200 dark:border-slate-800 font-semibold rounded-xl hover:border-slate-900 dark:hover:border-cyan-500 transition-all hover:-translate-y-1 shadow-sm hover:shadow-md">
-            Explore Lab Work
+            Explore Projects
           </Link>
         </div>
       </section>
@@ -36,7 +36,7 @@ export default function Home() {
       <section className="space-y-8 relative">
         <div className="absolute -left-4 top-0 bottom-0 w-1 bg-gradient-to-b from-cyan-500/50 dark:from-cyan-400/50 to-transparent rounded-full"></div>
         <div className="pl-6">
-          <h2 className="text-sm font-mono font-bold text-cyan-600 dark:text-cyan-400 uppercase tracking-widest mb-6">Featured Writing</h2>
+          <h2 className="text-sm font-mono font-bold text-cyan-600 dark:text-cyan-400 uppercase tracking-widest mb-6">Featured Posts</h2>
           
           <div className="group relative p-8 sm:p-10 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-sm hover:shadow-2xl hover:shadow-cyan-500/10 dark:hover:shadow-cyan-400/10 transition-all duration-300 overflow-hidden">
             <div className="absolute top-0 right-0 p-8 opacity-5 dark:opacity-10 group-hover:opacity-10 dark:group-hover:opacity-20 transition-opacity transform group-hover:scale-110 duration-500">

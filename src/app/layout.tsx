@@ -41,8 +41,8 @@ export default function RootLayout({
               </Link>
               <div className="flex items-center gap-6">
                 <nav className="hidden sm:flex items-center gap-6 text-sm font-medium text-slate-600 dark:text-slate-300">
-                  <Link href="/blog" className="hover:text-cyan-600 dark:hover:text-cyan-400 transition-colors relative after:absolute after:-bottom-1 after:left-0 after:w-0 after:h-0.5 after:bg-cyan-600 dark:after:bg-cyan-400 hover:after:w-full after:transition-all">Writing</Link>
-                  <Link href="/projects" className="hover:text-cyan-600 dark:hover:text-cyan-400 transition-colors relative after:absolute after:-bottom-1 after:left-0 after:w-0 after:h-0.5 after:bg-cyan-600 dark:after:bg-cyan-400 hover:after:w-full after:transition-all">Lab</Link>
+                  <Link href="/blog" className="hover:text-cyan-600 dark:hover:text-cyan-400 transition-colors relative after:absolute after:-bottom-1 after:left-0 after:w-0 after:h-0.5 after:bg-cyan-600 dark:after:bg-cyan-400 hover:after:w-full after:transition-all">Blog</Link>
+                  <Link href="/projects" className="hover:text-cyan-600 dark:hover:text-cyan-400 transition-colors relative after:absolute after:-bottom-1 after:left-0 after:w-0 after:h-0.5 after:bg-cyan-600 dark:after:bg-cyan-400 hover:after:w-full after:transition-all">Projects</Link>
                   <Link href="/resume" className="hover:text-cyan-600 dark:hover:text-cyan-400 transition-colors relative after:absolute after:-bottom-1 after:left-0 after:w-0 after:h-0.5 after:bg-cyan-600 dark:after:bg-cyan-400 hover:after:w-full after:transition-all">Resume</Link>
                   <div className="flex items-center gap-5 pl-4 border-l border-slate-200 dark:border-slate-700">
                     <a href="mailto:divyamkotaarora2@gmail.com" className="text-slate-400 hover:text-cyan-600 dark:text-slate-500 dark:hover:text-cyan-400 transition-colors" aria-label="Email">

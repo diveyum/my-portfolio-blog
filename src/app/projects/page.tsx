@@ -1,5 +1,5 @@
 export const metadata = {
-  title: "Lab & Projects | Divyam Arora",
+  title: "Projects | Divyam Arora",
   description: "A selection of my recent data science and ML engineering projects.",
 };
 
@@ -34,7 +34,7 @@ export default function Projects() {
   return (
     <div className="space-y-12">
       <header className="space-y-4 max-w-2xl">
-        <h1 className="text-4xl font-extrabold text-slate-900 dark:text-white tracking-tight">The Lab</h1>
+        <h1 className="text-4xl font-extrabold text-slate-900 dark:text-white tracking-tight">Projects</h1>
         <p className="text-xl text-slate-600 dark:text-slate-400 font-light">
           A collection of machine learning systems, AI agents, and predictive models I've built to solve complex business problems.
         </p>
