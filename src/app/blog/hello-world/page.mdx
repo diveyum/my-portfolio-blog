@@ -1,0 +1,21 @@
+import { CustomSlider } from '@/components/CustomSlider';
+
+# Hello MDX: Interactive Markdown
+
+This is a sample post written entirely in **MDX**. It supports all standard markdown features, like:
+
+- Bullet points
+- `inline code`
+- [Links](https://nextjs.org/docs/app/building-your-application/configuring/mdx)
+
+## The Power of MDX
+
+The real power of MDX is that you can import and render React components directly within the prose. This is exactly how you can build interactive technical guides, like your Model Distillation visualizer.
+
+Here is an example of an interactive component embedded right in the flow of the article:
+
+<div className="my-8 p-6 bg-slate-50 rounded-xl border border-slate-200">
+  <CustomSlider />
+</div>
+
+As you drag the slider, the state updates locally within the component without affecting the rest of the markdown document. This architecture gives you a beautiful "living space" for your portfolio.
