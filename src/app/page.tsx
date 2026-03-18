@@ -52,7 +52,7 @@ export default function Home() {
                 Interactive Guide
               </div>
               <h3 className="text-3xl font-extrabold text-slate-900 dark:text-white mb-4 group-hover:text-cyan-600 dark:group-hover:text-cyan-400 transition-colors">
-                <Link href="/blog/model-distillation/" className="focus:outline-none">
+                <Link href="/model-distillation/" className="focus:outline-none">
                   <span className="absolute inset-0" aria-hidden="true"></span>
                   An Illustrated Guide to Model Distillation
                 </Link>

@@ -10,8 +10,7 @@ export function IframeWrapper({ src, title }: { src: string; title: string }) {
     const handleMessage = (event: MessageEvent) => {
       if (event.data.type === "resize" && event.data.height) {
         const newHeight = event.data.height;
-        // Only update if change is > 2px to avoid micro-loops
-        if (Math.abs(newHeight - currentHeight) > 2) {
+        if (Math.abs(newHeight - currentHeight) > 1) {
           currentHeight = newHeight;
           setHeight(`${newHeight}px`);
         }

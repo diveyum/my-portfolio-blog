@@ -23,54 +23,6 @@
 </head>
 <body>
 
-<!-- Theme Sync & Height Resize with Next.js Parent -->
-<script>
-  function syncTheme() {
-    try {
-      if (window.parent && window.parent.document) {
-        const isDark = window.parent.document.documentElement.classList.contains('dark');
-        if (isDark) {
-          document.documentElement.classList.add('dark');
-        } else {
-          document.documentElement.classList.remove('dark');
-        }
-      }
-    } catch (e) {}
-  }
-  syncTheme();
-  
-  function sendHeight() {
-    try {
-      const height = document.documentElement.scrollHeight;
-      if (window.parent && window.parent !== window) {
-        window.parent.postMessage({ type: 'resize', height: height }, '*');
-      }
-    } catch(e) {}
-  }
-
-  // Use ResizeObserver for reliable height tracking
-  if (typeof ResizeObserver !== 'undefined') {
-    const ro = new ResizeObserver(entries => {
-      // Small delay to let rendering settle
-      requestAnimationFrame(sendHeight);
-    });
-    ro.observe(document.body);
-  } else {
-    window.addEventListener('load', sendHeight);
-    setTimeout(sendHeight, 1500);
-  }
-  
-  try {
-    if (window.parent && window.parent.document) {
-      const observer = new MutationObserver(() => {
-        syncTheme();
-        sendHeight();
-      });
-      observer.observe(window.parent.document.documentElement, { attributes: true, attributeFilter: ['class'] });
-    }
-  } catch (e) {}
-</script>
-
 <header>
 <div class="c">
   <h1>An Illustrated Guide to<br>Model Distillation</h1>
@@ -703,7 +655,7 @@
 <h2 class="rv" id="what-should-you-distill">What Should You Distill?</h2>
 <p class="rv">Select your scenario for a recommended approach:</p>
 
-<div class="rv" style="margin:1rem 0 1.5rem">
+<div class="rv" style="margin:1.5rem 0 2.5rem">
   <div class="cg">
     <button class="cb" data-s="mob" onclick="cfg('mob')">📱 Deploy on mobile / edge</button>
     <button class="cb" data-s="cost" onclick="cfg('cost')">💰 Reduce cloud costs</button>
@@ -736,6 +688,8 @@
 </section>
 </div>
 </main>
+
+<footer><div class="c"></div></footer>
 
 </body>
 </html>
