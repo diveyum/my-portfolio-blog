@@ -6,9 +6,15 @@ export function IframeWrapper({ src, title }: { src: string; title: string }) {
   const [height, setHeight] = useState("100vh");
 
   useEffect(() => {
+    let currentHeight = 0;
     const handleMessage = (event: MessageEvent) => {
       if (event.data.type === "resize" && event.data.height) {
-        setHeight(`${event.data.height}px`);
+        const newHeight = event.data.height;
+        // Only update if change is > 2px to avoid micro-loops
+        if (Math.abs(newHeight - currentHeight) > 2) {
+          currentHeight = newHeight;
+          setHeight(`${newHeight}px`);
+        }
       }
     };
     window.addEventListener("message", handleMessage);
@@ -18,8 +24,8 @@ export function IframeWrapper({ src, title }: { src: string; title: string }) {
   return (
     <iframe 
       src={src} 
-      style={{ height, minHeight: '100vh' }}
-      className="w-full border-none bg-transparent overflow-hidden block" 
+      style={{ height, width: '100%' }}
+      className="border-none bg-transparent overflow-hidden block" 
       scrolling="no"
       title={title}
     />

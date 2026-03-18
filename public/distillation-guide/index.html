@@ -41,8 +41,6 @@
   
   function sendHeight() {
     try {
-      // Ensure body doesn't stretch to fill iframe
-      document.body.style.height = 'auto';
       const height = document.body.offsetHeight;
       if (window.parent && window.parent !== window) {
         window.parent.postMessage({ type: 'resize', height: height }, '*');
@@ -50,10 +48,17 @@
     } catch(e) {}
   }
 
-  window.addEventListener('load', sendHeight);
-  // Re-calculate after math and interactive elements load
-  setTimeout(sendHeight, 1000);
-  setTimeout(sendHeight, 3000);
+  // Use ResizeObserver for reliable height tracking
+  if (typeof ResizeObserver !== 'undefined') {
+    const ro = new ResizeObserver(entries => {
+      // Small delay to let rendering settle
+      requestAnimationFrame(sendHeight);
+    });
+    ro.observe(document.body);
+  } else {
+    window.addEventListener('load', sendHeight);
+    setTimeout(sendHeight, 1500);
+  }
   
   try {
     if (window.parent && window.parent.document) {
@@ -698,7 +703,7 @@
 <h2 class="rv" id="what-should-you-distill">What Should You Distill?</h2>
 <p class="rv">Select your scenario for a recommended approach:</p>
 
-<div class="rv" style="margin:1.5rem 0 2.5rem">
+<div class="rv" style="margin:1rem 0 1.5rem">
   <div class="cg">
     <button class="cb" data-s="mob" onclick="cfg('mob')">📱 Deploy on mobile / edge</button>
     <button class="cb" data-s="cost" onclick="cfg('cost')">💰 Reduce cloud costs</button>
