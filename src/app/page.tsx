@@ -52,10 +52,10 @@ export default function Home() {
                 Interactive Guide
               </div>
               <h3 className="text-3xl font-extrabold text-slate-900 dark:text-white mb-4 group-hover:text-cyan-600 dark:group-hover:text-cyan-400 transition-colors">
-                <a href="/my-portfolio-blog/blog/model-distillation/index.html" className="focus:outline-none">
+                <Link href="/blog/model-distillation" className="focus:outline-none">
                   <span className="absolute inset-0" aria-hidden="true"></span>
                   An Illustrated Guide to Model Distillation
-                </a>
+                </Link>
               </h3>
               <p className="text-lg text-slate-600 dark:text-slate-400 mb-8 max-w-2xl leading-relaxed">
                 How large neural networks teach smaller ones what they know. A deep dive into temperature scaling, dark knowledge, and interactive math.
