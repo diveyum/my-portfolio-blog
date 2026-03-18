@@ -56,7 +56,7 @@ export default function RootLayout({
                     </a>
                   </div>
                 </nav>
-                <div className="pl-2 sm:pl-0 sm:border-l border-slate-200 dark:border-slate-700">
+                <div className="pl-4 sm:pl-6 sm:border-l border-slate-200 dark:border-slate-700 flex items-center">
                   <ThemeToggle />
                 </div>
               </div>
