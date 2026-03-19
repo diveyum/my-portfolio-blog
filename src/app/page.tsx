@@ -4,7 +4,7 @@ export default function Home() {
   return (
     <div className="space-y-24">
       {/* Hero Section */}
-      <section className="space-y-8 pt-8 sm:pt-12">
+      <section className="space-y-8 pt-4 sm:pt-6">
         <div className="inline-flex items-center px-4 py-1.5 rounded-full bg-cyan-100 dark:bg-cyan-900/30 text-cyan-800 dark:text-cyan-300 text-xs font-mono font-bold tracking-wide uppercase border border-cyan-200 dark:border-cyan-800/50 shadow-sm">
           <span className="relative flex h-2 w-2 mr-2">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
