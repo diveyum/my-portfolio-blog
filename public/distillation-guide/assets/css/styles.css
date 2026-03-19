@@ -107,7 +107,7 @@ html.dark {
    3. TYPOGRAPHY & PROSE
    ═══════════════════════════════════════════════════════════════════ */
 header {
-  padding: 1.5rem 0 1.5rem;
+  padding: 0.5rem 0 1.5rem;
   border-bottom: 1px solid var(--bdr);
   margin-bottom: 1.5rem;
 }
@@ -124,14 +124,14 @@ header .c {
   text-transform: uppercase;
   color: var(--c2);
   margin-top: 0;
-  margin-bottom: 0.8rem;
+  margin-bottom: 0.6rem;
 }
 
 h1 {
   font-size: 2.4rem;
   font-weight: 700;
   line-height: 1.18;
-  margin-bottom: 0.8rem;
+  margin-bottom: 0.6rem;
   color: var(--ink);
 }
 
@@ -143,7 +143,7 @@ h1 {
 }
 
 .meta {
-  margin-top: 0.8rem;
+  margin-top: 0.4rem;
   font-family: var(--ui);
   font-size: 0.72rem;
   color: var(--ink3);
