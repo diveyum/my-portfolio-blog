@@ -21,7 +21,7 @@ export default function BlogIndex() {
       <header className="space-y-4 max-w-2xl">
         <h1 className="text-4xl font-extrabold text-slate-900 dark:text-white tracking-tight">Blog</h1>
         <p className="text-xl text-slate-600 dark:text-slate-400 font-light">
-          Essays, tutorials, and interactive guides on Data Science and AI.
+          Exploring the intersection of machine learning, agentic workflows, and interactive visualizations. A digital garden where technical complexity meets human-centric design.
         </p>
       </header>
       

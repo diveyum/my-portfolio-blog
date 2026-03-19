@@ -74,10 +74,24 @@ export default function Resume() {
                   <span className="text-sm font-mono text-slate-500 dark:text-slate-400">Aug 2023 – Sept 2024</span>
                 </div>
                 <p className="text-sm font-bold text-cyan-600 dark:text-cyan-500 mb-4 uppercase tracking-wider">Accenture Strategy & Consulting – Gurugram</p>
-                <ul className="list-disc list-outside ml-4 text-slate-600 dark:text-slate-400 space-y-2 leading-relaxed">
-                  <li>Built RAG chatbot for a leading public-sector Indian bank using Azure OpenAI and LangChain for document retrieval.</li>
-                  <li>Built image classification model for a leading German automaker using OpenCV and SIFT to detect color and rim mismatches.</li>
-                </ul>
+                
+                <div className="mb-6">
+                  <p className="font-semibold text-slate-700 dark:text-slate-300 mb-2 italic">GenAI-Enabled Banking Chatbot</p>
+                  <ul className="list-disc list-outside ml-4 text-slate-600 dark:text-slate-400 space-y-2 leading-relaxed">
+                    <li>Built a RAG chatbot for a leading public-sector Indian bank using Azure OpenAI and LangChain, reducing customer query resolution time by 30%.</li>
+                    <li>Optimized inference costs through strategic chunking of text/tabular data and response caching.</li>
+                    <li>Implemented Responsible AI guardrails including PII filtering, toxicity detection, and human feedback loops.</li>
+                  </ul>
+                </div>
+
+                <div>
+                  <p className="font-semibold text-slate-700 dark:text-slate-300 mb-2 italic">Vehicle Image Quality Assurance System</p>
+                  <ul className="list-disc list-outside ml-4 text-slate-600 dark:text-slate-400 space-y-2 leading-relaxed">
+                    <li>Built an image classification model for a leading German automaker to detect color and rim mismatches in virtual showrooms.</li>
+                    <li>Performed feature engineering using OpenCV and SIFT, with LightGBM and AWS Rekognition for classification.</li>
+                    <li>Deployed on AWS Glue and Athena with multiprocessing, reducing processing time by 50% over manual workflows.</li>
+                  </ul>
+                </div>
               </div>
             </div>
           </section>
