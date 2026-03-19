@@ -20,9 +20,9 @@ export default function Resume() {
         <p className="text-lg text-slate-600 dark:text-slate-300 leading-relaxed font-light max-w-3xl">
           Data Scientist with 2.5+ years experience in shipping GenAI and ML systems across financial services and consulting. Built computer vision systems, document intelligence pipelines, and predictive models from development through deployment.
         </p>
-        </header>
+      </header>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-12 mt-8 pt-8 border-t border-slate-200 dark:border-slate-800">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-12 mt-4 pt-6 border-t border-slate-200 dark:border-slate-800">
         <div className="lg:col-span-2 space-y-12">
           <section className="space-y-8">
             <h2 className="text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-3">
