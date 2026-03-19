@@ -2,13 +2,13 @@ import Link from "next/link";
 
 export const metadata = {
   title: "Blog | Divyam Arora",
-  description: "Writings on software, AI, and engineering.",
+  description: "Essays, tutorials, and interactive guides on Data Science and AI.",
 };
 
 export default function BlogIndex() {
   return (
     <div className="space-y-8">
-      <h1 className="text-3xl font-bold text-slate-900 dark:text-white">Writing</h1>
+      <h1 className="text-3xl font-bold text-slate-900 dark:text-white">Blog</h1>
       <p className="text-slate-600 dark:text-slate-400">Essays, tutorials, and interactive guides on Data Science and AI.</p>
       
       <div className="space-y-6 mt-8">
