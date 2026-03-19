@@ -6,24 +6,55 @@ export const metadata = {
 };
 
 export default function BlogIndex() {
+  const posts = [
+    {
+      date: "March 18, 2026",
+      title: "An Illustrated Guide to Model Distillation",
+      category: "Interactive Guide",
+      description: "How large neural networks teach smaller ones what they know. A visual walkthrough of theory, temperature scaling, dark knowledge, and interactive math.",
+      href: "/model-distillation/",
+    }
+  ];
+
   return (
-    <div className="space-y-8">
-      <h1 className="text-3xl font-bold text-slate-900 dark:text-white">Blog</h1>
-      <p className="text-slate-600 dark:text-slate-400">Essays, tutorials, and interactive guides on Data Science and AI.</p>
+    <div className="space-y-12">
+      <header className="space-y-4 max-w-2xl">
+        <h1 className="text-4xl font-extrabold text-slate-900 dark:text-white tracking-tight">Blog</h1>
+        <p className="text-xl text-slate-600 dark:text-slate-400 font-light">
+          Essays, tutorials, and interactive guides on Data Science and AI.
+        </p>
+      </header>
       
-      <div className="space-y-6 mt-8">
-        <article className="group block p-6 -mx-6 rounded-2xl hover:bg-slate-50 dark:hover:bg-slate-900 transition-colors">
-          <p className="text-sm font-mono text-cyan-600 dark:text-cyan-400 mb-2">March 18, 2026</p>
-          <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-3 group-hover:text-cyan-600 dark:group-hover:text-cyan-400 transition-colors">
-            <Link href="/model-distillation/" className="focus:outline-none">
-              <span className="absolute inset-0" aria-hidden="true"></span>
-              An Illustrated Guide to Model Distillation
-            </Link>
-          </h2>
-          <p className="text-slate-600 dark:text-slate-400 leading-relaxed">
-            How large neural networks teach smaller ones what they know. A visual walkthrough of theory, temperature scaling, dark knowledge, and interactive math.
-          </p>
-        </article>
+      <div className="grid grid-cols-1 gap-8">
+        {posts.map((post, i) => (
+          <div key={i} className="group p-8 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm hover:shadow-xl hover:border-cyan-200 dark:hover:border-cyan-800 transition-all duration-300 flex flex-col h-full relative">
+            <div className="flex justify-between items-start mb-3">
+              <div className="text-xs font-mono font-bold text-teal-600 dark:text-teal-400 uppercase tracking-widest">
+                {post.category}
+              </div>
+              <div className="text-xs font-mono text-slate-400 dark:text-slate-500 uppercase tracking-widest">
+                {post.date}
+              </div>
+            </div>
+            <h3 className="text-2xl font-bold text-slate-900 dark:text-white mb-4 group-hover:text-cyan-600 dark:group-hover:text-cyan-400 transition-colors">
+              <Link href={post.href} className="focus:outline-none">
+                <span className="absolute inset-0" aria-hidden="true"></span>
+                {post.title}
+              </Link>
+            </h3>
+            <p className="text-slate-600 dark:text-slate-400 leading-relaxed mb-4">
+              {post.description}
+            </p>
+            <div className="mt-auto">
+              <span className="inline-flex items-center text-sm font-bold text-cyan-600 dark:text-cyan-400 group-hover:translate-x-1 transition-transform">
+                Read guide 
+                <svg className="ml-2 w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                </svg>
+              </span>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
