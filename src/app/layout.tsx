@@ -25,7 +25,7 @@ export default function RootLayout({
       <body
         className={`${inter.variable} ${lora.variable} ${mono.variable} font-sans antialiased bg-[#fafafa] dark:bg-slate-950 text-slate-900 dark:text-slate-100 min-h-screen flex flex-col selection:bg-cyan-200 selection:text-cyan-900 dark:selection:bg-cyan-900 dark:selection:text-cyan-100`}
       >
-        <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
+        <ThemeProvider attribute="class" defaultTheme="light" enableSystem>
           {/* Subtle dot matrix background that adapts to dark mode */}
           <div className="fixed inset-0 z-[-1] bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] dark:bg-[radial-gradient(#1e293b_1px,transparent_1px)] [background-size:16px_16px] opacity-50 dark:opacity-20"></div>
           
