@@ -14,6 +14,14 @@ export default function BlogIndex() {
       description: "How large neural networks teach smaller ones what they know. A visual walkthrough of theory, temperature scaling, dark knowledge, and interactive math.",
       href: "/model-distillation/",
     }
+    {
+      slug: 'tabicl',
+      title: 'The Illustrated Tabular Foundation Model',
+      description: 'A visual deep dive into TabICLv2 — how a single forward pass replaces gradient descent on tabular data.',
+      date: '2026-04-28',
+      readTime: '18 min',
+      href: '/tabicl/',
+    }
   ];
 
   return (
