@@ -1,0 +1,1286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script>document.documentElement.classList.add('js');</script>
+  <meta name="description" content="A visual deep dive into TabICLv2, the state-of-the-art tabular foundation model. Column-wise attention, row-wise ICL, QASSMax, and the meta-learning insight, illustrated end to end.">
+  <meta name="author" content="Divyam Arora">
+  <meta property="og:title" content="The Illustrated Tabular Foundation Model: A Visual Deep Dive into TabICLv2">
+  <meta property="og:description" content="How a single forward pass replaces gradient descent on tabular data. A diagram-first walkthrough of TabICLv2.">
+  <meta property="og:type" content="article">
+  <meta property="article:modified_time" content="2026-04-28">
+  <title>The Illustrated Tabular Foundation Model</title>
+
+  <link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"></script>
+
+  <link rel="stylesheet" href="assets/css/styles.css">
+  <script defer src="assets/js/main.js"></script>
+</head>
+<body>
+
+<!-- Theme & resize sync with parent Next.js app (matches distillation guide pattern) -->
+<script>
+  function syncTheme() {
+    try {
+      if (window.parent && window.parent.document) {
+        const isDark = window.parent.document.documentElement.classList.contains('dark');
+        document.documentElement.classList.toggle('dark', isDark);
+      }
+    } catch (e) {}
+  }
+  syncTheme();
+
+  function sendHeight() {
+    try {
+      const height = document.documentElement.scrollHeight;
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({ type: 'resize', height: height }, '*');
+      }
+    } catch(e) {}
+  }
+
+  if (typeof ResizeObserver !== 'undefined') {
+    const ro = new ResizeObserver(() => requestAnimationFrame(sendHeight));
+    ro.observe(document.body);
+  } else {
+    window.addEventListener('load', sendHeight);
+    setTimeout(sendHeight, 1500);
+  }
+
+  try {
+    if (window.parent && window.parent.document) {
+      const observer = new MutationObserver(() => { syncTheme(); sendHeight(); });
+      observer.observe(window.parent.document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    }
+  } catch (e) {}
+</script>
+
+<header>
+<div class="c">
+  <h1>The Illustrated Tabular<br>Foundation Model</h1>
+  <p class="sub">A visual deep dive into TabICLv2. How a single forward pass replaces gradient descent on tabular data.</p>
+  <div class="meta"><a href="https://www.linkedin.com/in/divyama/" target="_blank" rel="noopener noreferrer" style="color:var(--ink2);text-decoration:none;border-bottom:1px solid var(--bdr)">Divyam Arora</a> <span class="sep">·</span> 18 min read</div>
+</div>
+</header>
+
+<main>
+<div class="c">
+
+<div class="prereq">
+  <strong>Prerequisites:</strong> This post assumes basic familiarity with transformers. If you need that foundation first, read <a href="https://jalammar.github.io/illustrated-transformer/" target="_blank" rel="noopener noreferrer">Jay Alammar's Illustrated Transformer</a>. It takes 20 minutes and is worth every second. Everything tabular-specific is built up from scratch below.
+</div>
+
+<noscript><div class="nojs-note">The interactive figures need JavaScript, but every diagram is static SVG and the prose is fully readable without it.</div></noscript>
+
+<nav class="toc" aria-label="Table of contents">
+  <div class="toc-title">On this page</div>
+  <div class="toc-list">
+    <a href="#black-box">The black box</a>
+    <a href="#why-hard">Why tabular data is hard</a>
+    <a href="#foundation">The foundation-model idea</a>
+    <a href="#architecture">The three-stage architecture</a>
+    <a href="#feature-grouping">Feature grouping</a>
+    <a href="#target-aware">Target-aware embedding</a>
+    <a href="#column-attention">Column-wise attention</a>
+    <a href="#row-pooling">Row pooling</a>
+    <a href="#row-vectors">The sequence of row vectors</a>
+    <a href="#row-icl">Row-wise ICL (QKV from scratch)</a>
+    <a href="#qkv-why">Why Q, K, V are three things</a>
+    <a href="#masking">Masking</a>
+    <a href="#qassmax">Attention fading and QASSMax</a>
+    <a href="#training">Where the weights came from</a>
+    <a href="#stacking">Stacking layers</a>
+    <a href="#end-to-end">Putting it all together</a>
+    <a href="#glossed-over">What we glossed over</a>
+    <a href="#references">References</a>
+  </div>
+</nav>
+
+<!-- ══════════ §1 BLACK BOX ══════════ -->
+<h2 class="rv" id="black-box">The Black Box</h2>
+
+<p class="rv">Before we open it up, here is the whole system in one diagram. You feed TabICLv2 a table (some training rows with labels, one test row without) and it hands you back a prediction. No training. No gradient descent. No fitting on your data. Just a forward pass.</p>
+</div>
+
+<!-- FIG 1: black box -->
+<div class="fig fw rv">
+<svg viewBox="0 0 740 280" xmlns="http://www.w3.org/2000/svg" style="max-width:680px">
+  <!-- Input table -->
+  <g>
+    <text x="100" y="30" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" font-weight="700" fill="var(--c2)" letter-spacing=".08em">INPUT TABLE</text>
+    <rect x="30" y="42" width="140" height="22" rx="3" fill="var(--row-train)" opacity="0.88"/>
+    <text x="100" y="57" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="9.5" fill="#fff">C_001 ... default</text>
+    <rect x="30" y="68" width="140" height="22" rx="3" fill="var(--row-train)" opacity="0.88"/>
+    <text x="100" y="83" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="9.5" fill="#fff">C_002 ... no default</text>
+    <rect x="30" y="94" width="140" height="22" rx="3" fill="var(--row-train)" opacity="0.88"/>
+    <text x="100" y="109" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="9.5" fill="#fff">C_003 ... default</text>
+    <rect x="30" y="120" width="140" height="22" rx="3" fill="var(--row-test)"/>
+    <text x="100" y="135" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="9.5" fill="#fff">C_004 ... ???</text>
+    <text x="100" y="170" text-anchor="middle" font-family="Inter,sans-serif" font-size="9.5" fill="#64748b">3 training rows + 1 test row</text>
+  </g>
+
+  <!-- Black box -->
+  <g>
+    <rect x="280" y="60" width="180" height="120" rx="14" fill="#0f172a" stroke="#0f172a" stroke-width="2"/>
+    <text x="370" y="115" text-anchor="middle" font-family="Inter,sans-serif" font-size="14" font-weight="700" fill="#fff">TabICLv2</text>
+    <text x="370" y="138" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" fill="#94a3b8">forward pass only</text>
+    <text x="370" y="156" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" fill="#94a3b8">no gradient updates</text>
+  </g>
+
+  <!-- Output -->
+  <g>
+    <text x="640" y="30" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" font-weight="700" fill="var(--c2)" letter-spacing=".08em">PREDICTION</text>
+    <rect x="555" y="95" width="170" height="50" rx="6" fill="var(--output)" opacity="0.92"/>
+    <text x="640" y="115" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" font-weight="600" fill="#fff">p(default | C_004)</text>
+    <text x="640" y="135" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="14" font-weight="700" fill="#fff">= 0.87</text>
+  </g>
+
+  <!-- Arrows -->
+  <defs>
+    <marker id="ar1" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <polygon points="0 0,9 3.5,0 7" fill="#64748b"/>
+    </marker>
+  </defs>
+  <line x1="175" y1="120" x2="275" y2="120" stroke="#64748b" stroke-width="2" marker-end="url(#ar1)"/>
+  <line x1="465" y1="120" x2="550" y2="120" stroke="#64748b" stroke-width="2" marker-end="url(#ar1)"/>
+
+  <text x="370" y="220" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" fill="#64748b">A pre-trained model that reads any table and predicts in a single pass.</text>
+</svg>
+<div class="fc"><strong>Figure 1.</strong> TabICLv2 as a black box. Training rows go in, the test row's prediction comes out. No fine-tuning, no per-dataset training run. The same color scheme runs through every figure in this post:
+<span style="display:inline-block;margin-top:0.4rem;font-family:var(--ui);font-size:0.7rem">
+<span style="display:inline-block;width:11px;height:11px;background:var(--row-train);border-radius:2px;vertical-align:middle;margin:0 4px 0 8px"></span>training rows
+<span style="display:inline-block;width:11px;height:11px;background:var(--row-test);border-radius:2px;vertical-align:middle;margin:0 4px 0 12px"></span>test row (C_004)
+<span style="display:inline-block;width:11px;height:11px;background:var(--weight);border-radius:2px;vertical-align:middle;margin:0 4px 0 12px"></span>weight matrices
+<span style="display:inline-block;width:11px;height:11px;background:var(--output);border-radius:2px;vertical-align:middle;margin:0 4px 0 12px"></span>predictions
+</span></div>
+</div>
+
+<div class="c">
+
+<p class="rv">The whole post is about what's inside that box and why it works. Let's open it.</p>
+
+<!-- ══════════ §2 WHY HARD ══════════ -->
+<h2 class="rv" id="why-hard">Why Tabular Data Is Hard</h2>
+
+<p class="rv">Text has a fixed vocabulary. Images have a fixed pixel grid. A model trained on English can read any new English sentence; a model trained on ImageNet can process any new RGB image of the right shape. The input space is shared.</p>
+
+<p class="rv">Tables have none of that. Every dataset has different columns, different scales, different types. A model trained on the Amex default-prediction table cannot look at the iris flower dataset without retraining. There is no shared "tabular vocabulary." For the last twenty years, the answer has been: train a fresh model from scratch for every new table. <a class="r" href="https://arxiv.org/abs/2207.08815" target="_blank" rel="noopener noreferrer">Gradient-boosted trees won that era</a> by being very good at this from-scratch fitting.</p>
+
+<p class="rv">What changed: <a class="r" href="https://arxiv.org/abs/2207.01848" target="_blank" rel="noopener noreferrer">TabPFN (2022)</a> showed you can pre-train a transformer on millions of synthetic tables, and it learns a general skill of "reading a tabular context to predict a held-out row." TabPFN, TabPFNv2, TabICL, and now <a class="r" href="https://arxiv.org/abs/2602.11139" target="_blank" rel="noopener noreferrer">TabICLv2</a> all live in this paradigm.</p>
+
+<!-- ══════════ §3 FOUNDATION ══════════ -->
+<h2 class="rv" id="foundation">The Foundation-Model Idea</h2>
+
+<p class="rv">Here is the paradigm shift in one diagram.</p>
+</div>
+
+<!-- FIG 2: classical vs ICL -->
+<div class="fig fw rv">
+<svg viewBox="0 0 740 300" xmlns="http://www.w3.org/2000/svg" style="max-width:700px">
+  <!-- Classical (top) -->
+  <g>
+    <text x="40" y="30" font-family="Inter,sans-serif" font-size="11" font-weight="700" fill="#64748b" letter-spacing=".08em">CLASSICAL ML (e.g. XGBoost)</text>
+
+    <rect x="40" y="48" width="110" height="50" rx="5" fill="var(--row-train-bg)" stroke="var(--row-train)" stroke-width="1.5"/>
+    <text x="95" y="68" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="600" fill="var(--ink)">Your table</text>
+    <text x="95" y="85" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink2)">100K rows</text>
+
+    <line x1="155" y1="73" x2="220" y2="73" stroke="#64748b" stroke-width="1.5" marker-end="url(#ar2)"/>
+    <text x="187" y="64" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#64748b">train</text>
+
+    <rect x="225" y="48" width="135" height="50" rx="5" fill="var(--bg2)" stroke="var(--weight)" stroke-width="1.5"/>
+    <text x="292" y="68" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="600" fill="var(--ink)">Fresh model</text>
+    <text x="292" y="85" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink2)">~hours of compute</text>
+
+    <line x1="365" y1="73" x2="430" y2="73" stroke="#64748b" stroke-width="1.5" marker-end="url(#ar2)"/>
+    <text x="397" y="64" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#64748b">predict</text>
+
+    <rect x="435" y="48" width="115" height="50" rx="5" fill="var(--c7)" stroke="var(--output)" stroke-width="1.5"/>
+    <text x="492" y="78" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="600" fill="var(--ink)">Predictions</text>
+
+    <text x="585" y="62" font-family="Inter,sans-serif" font-size="9.5" fill="var(--ink2)" font-style="italic">New table?</text>
+    <text x="585" y="76" font-family="Inter,sans-serif" font-size="9.5" fill="var(--ink2)" font-style="italic">Train again</text>
+    <text x="585" y="90" font-family="Inter,sans-serif" font-size="9.5" fill="var(--ink2)" font-style="italic">from scratch.</text>
+  </g>
+
+  <line x1="40" y1="135" x2="700" y2="135" stroke="var(--bdr)" stroke-width="1" stroke-dasharray="4 3"/>
+
+  <!-- TabICLv2 (bottom) -->
+  <g>
+    <text x="40" y="170" font-family="Inter,sans-serif" font-size="11" font-weight="700" fill="var(--c2)" letter-spacing=".08em">FOUNDATION MODEL (TabICLv2)</text>
+
+    <g>
+      <rect x="40" y="184" width="110" height="22" rx="3" fill="var(--bg2)"/>
+      <text x="95" y="199" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink2)">synth dataset 1</text>
+      <rect x="40" y="208" width="110" height="22" rx="3" fill="var(--bg2)"/>
+      <text x="95" y="223" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink2)">synth dataset 2</text>
+      <rect x="40" y="232" width="110" height="22" rx="3" fill="var(--bg2)"/>
+      <text x="95" y="247" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink2)">... millions more</text>
+    </g>
+
+    <line x1="155" y1="219" x2="220" y2="219" stroke="#64748b" stroke-width="1.5" marker-end="url(#ar2)"/>
+    <text x="187" y="210" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#64748b">pretrain once</text>
+
+    <rect x="225" y="190" width="135" height="60" rx="6" fill="#0f172a"/>
+    <text x="292" y="217" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="#fff">TabICLv2</text>
+    <text x="292" y="232" text-anchor="middle" font-family="Inter,sans-serif" font-size="8.5" fill="#94a3b8">~24.5 H100-days</text>
+
+    <line x1="365" y1="219" x2="430" y2="219" stroke="#64748b" stroke-width="1.5" marker-end="url(#ar2)"/>
+
+    <rect x="435" y="184" width="115" height="22" rx="3" fill="var(--row-train-bg)"/>
+    <text x="492" y="199" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink)">Your table</text>
+    <rect x="435" y="208" width="115" height="22" rx="3" fill="var(--row-train-bg)"/>
+    <text x="492" y="223" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink)">Iris dataset</text>
+    <rect x="435" y="232" width="115" height="22" rx="3" fill="var(--row-train-bg)"/>
+    <text x="492" y="247" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink)">Anything else</text>
+
+    <line x1="555" y1="219" x2="610" y2="219" stroke="#64748b" stroke-width="1.5" marker-end="url(#ar2)"/>
+    <text x="582" y="210" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#64748b">forward pass</text>
+
+    <rect x="615" y="195" width="100" height="50" rx="5" fill="var(--c7)" stroke="var(--output)" stroke-width="1.5"/>
+    <text x="665" y="216" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="600" fill="var(--ink)">Predictions</text>
+    <text x="665" y="232" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink2)">~seconds</text>
+  </g>
+
+  <defs>
+    <marker id="ar2" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#64748b"/>
+    </marker>
+  </defs>
+</svg>
+<div class="fc"><strong>Figure 2.</strong> Classical ML fits a model to your data, so every new dataset means a new training run. TabICLv2 is pre-trained once, on a generative process that samples a fresh synthetic dataset every step. After that, any table you hand it is just context for a forward pass.</div>
+</div>
+
+<div class="c">
+
+<p class="rv">The training data for the foundation model is not real tables. It is millions of synthetic tables generated by a procedural process that we will look at in <a href="#training" class="r">section 14</a>. The point of pre-training is not to memorize any table (that would be useless). It is to learn the general skill of <em>reading any tabular context and predicting a held-out row.</em> That skill is what gets baked into the weights.</p>
+
+<p class="rv">Now we open the box. From here on, everything we look at is what happens inside that black diagram in Figure 1.</p>
+
+<!-- ══════════ §4 ARCHITECTURE ══════════ -->
+<h2 class="rv" id="architecture">The Three-Stage Architecture</h2>
+
+<p class="rv">TabICLv2 has three stages. The first turns each row into a vector by looking at how its features relate to each other. The second stitches those vectors together. The third is the heart of in-context learning: the test row attends across the training rows to find ones that look like it.</p>
+</div>
+
+<!-- FIG 3: three stages -->
+<div class="fig fw rv">
+<svg viewBox="0 0 740 260" xmlns="http://www.w3.org/2000/svg" style="max-width:700px">
+  <!-- Input -->
+  <g>
+    <rect x="30" y="80" width="90" height="100" rx="6" fill="var(--row-train-bg)" stroke="var(--row-train)" stroke-width="1.5"/>
+    <text x="75" y="65" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="var(--c2)">INPUT TABLE</text>
+    <text x="75" y="100" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="9" fill="var(--ink)">n × m</text>
+    <text x="75" y="120" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink2)">rows × cols</text>
+    <text x="75" y="155" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink3)">+ labels for</text>
+    <text x="75" y="168" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink3)">training rows</text>
+  </g>
+
+  <!-- Stage 1: TF_col -->
+  <g>
+    <rect x="170" y="60" width="130" height="140" rx="8" fill="#fff" stroke="var(--c2)" stroke-width="2"/>
+    <text x="235" y="38" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="var(--c2)" letter-spacing=".06em">STAGE 1</text>
+    <text x="235" y="85" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" font-weight="700" fill="var(--ink)">TF_col</text>
+    <text x="235" y="102" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink2)">column-wise</text>
+    <text x="235" y="115" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink2)">embedding</text>
+    <line x1="190" y1="135" x2="280" y2="135" stroke="var(--bdr)" stroke-width="1" stroke-dasharray="2 2"/>
+    <text x="235" y="155" text-anchor="middle" font-family="Inter,sans-serif" font-size="8.5" fill="var(--ink3)">features within</text>
+    <text x="235" y="167" text-anchor="middle" font-family="Inter,sans-serif" font-size="8.5" fill="var(--ink3)">a row attend</text>
+    <text x="235" y="179" text-anchor="middle" font-family="Inter,sans-serif" font-size="8.5" fill="var(--ink3)">to each other</text>
+  </g>
+
+  <!-- Stage 2: TF_row -->
+  <g>
+    <rect x="350" y="60" width="130" height="140" rx="8" fill="#fff" stroke="var(--c2)" stroke-width="2"/>
+    <text x="415" y="38" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="var(--c2)" letter-spacing=".06em">STAGE 2</text>
+    <text x="415" y="85" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" font-weight="700" fill="var(--ink)">TF_row</text>
+    <text x="415" y="102" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink2)">row pooling</text>
+    <line x1="370" y1="135" x2="460" y2="135" stroke="var(--bdr)" stroke-width="1" stroke-dasharray="2 2"/>
+    <text x="415" y="155" text-anchor="middle" font-family="Inter,sans-serif" font-size="8.5" fill="var(--ink3)">collapse each</text>
+    <text x="415" y="167" text-anchor="middle" font-family="Inter,sans-serif" font-size="8.5" fill="var(--ink3)">row's features</text>
+    <text x="415" y="179" text-anchor="middle" font-family="Inter,sans-serif" font-size="8.5" fill="var(--ink3)">to one vector</text>
+  </g>
+
+  <!-- Stage 3: TF_icl -->
+  <g>
+    <rect x="530" y="60" width="130" height="140" rx="8" fill="#0f172a" stroke="var(--row-test)" stroke-width="2"/>
+    <text x="595" y="38" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="var(--row-test)" letter-spacing=".06em">STAGE 3</text>
+    <text x="595" y="85" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" font-weight="700" fill="#fff">TF_icl</text>
+    <text x="595" y="102" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#cbd5e1">in-context</text>
+    <text x="595" y="115" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#cbd5e1">learning</text>
+    <line x1="550" y1="135" x2="640" y2="135" stroke="#475569" stroke-width="1" stroke-dasharray="2 2"/>
+    <text x="595" y="155" text-anchor="middle" font-family="Inter,sans-serif" font-size="8.5" fill="#94a3b8">test row attends</text>
+    <text x="595" y="167" text-anchor="middle" font-family="Inter,sans-serif" font-size="8.5" fill="#94a3b8">across training</text>
+    <text x="595" y="179" text-anchor="middle" font-family="Inter,sans-serif" font-size="8.5" fill="#94a3b8">rows</text>
+  </g>
+
+  <!-- Connectors with labels -->
+  <line x1="120" y1="130" x2="165" y2="130" stroke="#64748b" stroke-width="1.5" marker-end="url(#ar3)"/>
+  <line x1="300" y1="130" x2="345" y2="130" stroke="#64748b" stroke-width="1.5" marker-end="url(#ar3)"/>
+  <text x="322" y="123" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="var(--ink3)">enriched</text>
+  <text x="322" y="145" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="var(--ink3)">features</text>
+
+  <line x1="480" y1="130" x2="525" y2="130" stroke="#64748b" stroke-width="1.5" marker-end="url(#ar3)"/>
+  <text x="502" y="123" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="var(--ink3)">row</text>
+  <text x="502" y="145" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="var(--ink3)">vectors</text>
+
+  <defs>
+    <marker id="ar3" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#64748b"/>
+    </marker>
+  </defs>
+
+  <text x="370" y="230" text-anchor="middle" font-family="Inter,sans-serif" font-size="9.5" fill="var(--ink3)" font-style="italic">All three stages stack L times. The whole thing is one forward pass.</text>
+</svg>
+<div class="fc"><strong>Figure 3.</strong> The architectural skeleton. Stage 1 (TF_col) lets features within a single row interact. Stage 2 (TF_row) compresses each row's enriched features into a single vector. Stage 3 (TF_icl) is the in-context learning step: the test row attends across the training rows. The whole pipeline runs L times in stacked layers.</div>
+</div>
+
+<div class="c">
+
+<p class="rv">Before any of these three stages can run, we need the table in a form a transformer can chew on. That means turning numbers into vectors. The next two sections handle that, and they are where the first two TabICLv2-specific ideas live.</p>
+
+<!-- ══════════ §5 FEATURE GROUPING ══════════ -->
+<h2 class="rv" id="feature-grouping">How a Row Becomes a Vector, Part 1: Feature Grouping</h2>
+
+<p class="rv">Throughout the rest of this post we will use one running example. A simplified slice of the <a class="r" href="https://www.kaggle.com/competitions/amex-default-prediction" target="_blank" rel="noopener noreferrer">American Express default prediction dataset</a> with five features per customer.</p>
+</div>
+
+<!-- FIG 4: running example table -->
+<div class="fig fw rv">
+<table class="dtable">
+  <thead>
+    <tr>
+      <th>customer</th>
+      <th>balance ratio</th>
+      <th>spend</th>
+      <th>payment ratio</th>
+      <th>days delinquent</th>
+      <th>risk score</th>
+      <th>target</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr class="train"><td>C_001</td><td>0.93</td><td>0.45</td><td>0.12</td><td>14</td><td>0.67</td><td class="lbl">default</td></tr>
+    <tr class="train"><td>C_002</td><td>0.21</td><td>0.08</td><td>0.87</td><td>0</td><td>0.11</td><td class="lbl">no default</td></tr>
+    <tr class="train"><td>C_003</td><td>0.78</td><td>0.61</td><td>0.09</td><td>22</td><td>0.81</td><td class="lbl">default</td></tr>
+    <tr class="test"><td>C_004</td><td>0.88</td><td>0.52</td><td>0.11</td><td>18</td><td>0.71</td><td class="unknown">???</td></tr>
+  </tbody>
+</table>
+<div class="legend">
+  <span><span class="swatch" style="background:var(--row-train-bg);border:1px solid var(--row-train)"></span>Training rows (labels visible to model)</span>
+  <span><span class="swatch" style="background:var(--row-test-bg);border:1px solid var(--row-test)"></span>Test row (label hidden)</span>
+</div>
+<div class="fc"><strong>Figure 4.</strong> Our running example. The pattern is intentionally obvious: high balance ratio + low payment ratio + many days delinquent points to default. C_004 looks a lot like C_001 and C_003. So when the model attends across rows, it should pull most of its signal from those two, both of whom defaulted. In the real Amex dataset these features map to <code>B_1</code>, <code>S_3</code>, <code>P_2</code>, <code>D_39</code>, and <code>R_1</code>.</div>
+</div>
+
+<div class="c">
+
+<p class="rv">The first step is to turn each row into a sequence of vectors, one per feature. The naïve way is to embed each column independently with its own linear layer. <a class="r" href="https://arxiv.org/abs/2502.05564" target="_blank" rel="noopener noreferrer">TabICL did this</a>. The problem: when two columns have similar distributions (say <code>balance ratio</code> and <code>risk score</code>, both bounded in [0, 1] and both leaning high for risky customers) independent embedding can produce nearly identical vectors. The model loses its ability to tell them apart. This is called <em>representation collapse</em>.</p>
+
+<p class="rv">TabICLv2 fixes this with <strong>repeated feature grouping</strong>. Instead of embedding each column alone, every column is bundled with two of its neighbors via circular shifts: column <em>j</em> is grouped with columns <em>j+1</em> and <em>j+3</em> (mod m). For our 5-column table, that gives us five overlapping triples.</p>
+</div>
+
+<!-- FIG 5: feature grouping -->
+<div class="fig fw rv">
+<svg viewBox="0 0 740 290" xmlns="http://www.w3.org/2000/svg" style="max-width:680px">
+  <!-- Original 5 columns of C_001 -->
+  <text x="40" y="30" font-family="Inter,sans-serif" font-size="11" font-weight="700" fill="var(--c2)" letter-spacing=".06em">C_001's RAW FEATURES</text>
+
+  <g>
+    <rect x="40" y="42" width="76" height="32" rx="4" fill="var(--row-train-bg)" stroke="var(--row-train)"/>
+    <text x="78" y="56" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink2)">bal ratio</text>
+    <text x="78" y="68" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="10" font-weight="600" fill="var(--ink)">0.93</text>
+
+    <rect x="120" y="42" width="76" height="32" rx="4" fill="var(--row-train-bg)" stroke="var(--row-train)"/>
+    <text x="158" y="56" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink2)">spend</text>
+    <text x="158" y="68" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="10" font-weight="600" fill="var(--ink)">0.45</text>
+
+    <rect x="200" y="42" width="76" height="32" rx="4" fill="var(--row-train-bg)" stroke="var(--row-train)"/>
+    <text x="238" y="56" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink2)">pay ratio</text>
+    <text x="238" y="68" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="10" font-weight="600" fill="var(--ink)">0.12</text>
+
+    <rect x="280" y="42" width="76" height="32" rx="4" fill="var(--row-train-bg)" stroke="var(--row-train)"/>
+    <text x="318" y="56" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink2)">days delq</text>
+    <text x="318" y="68" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="10" font-weight="600" fill="var(--ink)">14</text>
+
+    <rect x="360" y="42" width="76" height="32" rx="4" fill="var(--row-train-bg)" stroke="var(--row-train)"/>
+    <text x="398" y="56" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink2)">risk score</text>
+    <text x="398" y="68" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="10" font-weight="600" fill="var(--ink)">0.67</text>
+  </g>
+
+  <text x="40" y="118" font-family="Inter,sans-serif" font-size="11" font-weight="700" fill="var(--c2)" letter-spacing=".06em">5 OVERLAPPING TRIPLES (j, j+1, j+3) mod 5</text>
+
+  <!-- 5 groups -->
+  <g font-family="JetBrains Mono,monospace" font-size="9.5" font-weight="600" fill="var(--ink)">
+    <!-- Group 1: cols 0,1,3 -->
+    <rect x="40" y="135" width="120" height="28" rx="4" fill="#fff" stroke="var(--weight)" stroke-width="1.5"/>
+    <text x="100" y="153" text-anchor="middle">{0.93, 0.45, 14}</text>
+    <text x="100" y="180" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="var(--ink3)" font-weight="400">cols 0,1,3</text>
+
+    <rect x="170" y="135" width="120" height="28" rx="4" fill="#fff" stroke="var(--weight)" stroke-width="1.5"/>
+    <text x="230" y="153" text-anchor="middle">{0.45, 0.12, 0.67}</text>
+    <text x="230" y="180" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="var(--ink3)" font-weight="400">cols 1,2,4</text>
+
+    <rect x="300" y="135" width="120" height="28" rx="4" fill="#fff" stroke="var(--weight)" stroke-width="1.5"/>
+    <text x="360" y="153" text-anchor="middle">{0.12, 14, 0.93}</text>
+    <text x="360" y="180" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="var(--ink3)" font-weight="400">cols 2,3,0</text>
+
+    <rect x="430" y="135" width="120" height="28" rx="4" fill="#fff" stroke="var(--weight)" stroke-width="1.5"/>
+    <text x="490" y="153" text-anchor="middle">{14, 0.67, 0.45}</text>
+    <text x="490" y="180" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="var(--ink3)" font-weight="400">cols 3,4,1</text>
+
+    <rect x="560" y="135" width="120" height="28" rx="4" fill="#fff" stroke="var(--weight)" stroke-width="1.5"/>
+    <text x="620" y="153" text-anchor="middle">{0.67, 0.93, 0.12}</text>
+    <text x="620" y="180" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="var(--ink3)" font-weight="400">cols 4,0,2</text>
+  </g>
+
+  <!-- Shared Linear layer as a pill -->
+  <g>
+    <rect x="40" y="195" width="640" height="30" rx="15" fill="#fff" stroke="var(--weight)" stroke-width="2"/>
+    <text x="360" y="214" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" font-weight="700" fill="var(--c2)" letter-spacing=".04em">SHARED Lin: R³ → R^d</text>
+  </g>
+
+  <!-- Connector lines: groups → pill → embeddings -->
+  <g stroke="#94a3b8" stroke-width="1" fill="none" opacity="0.7">
+    <line x1="100" y1="183" x2="100" y2="195"/>
+    <line x1="230" y1="183" x2="230" y2="195"/>
+    <line x1="360" y1="183" x2="360" y2="195"/>
+    <line x1="490" y1="183" x2="490" y2="195"/>
+    <line x1="620" y1="183" x2="620" y2="195"/>
+
+    <line x1="100" y1="225" x2="100" y2="240"/>
+    <line x1="230" y1="225" x2="230" y2="240"/>
+    <line x1="360" y1="225" x2="360" y2="240"/>
+    <line x1="490" y1="225" x2="490" y2="240"/>
+    <line x1="620" y1="225" x2="620" y2="240"/>
+  </g>
+
+  <g>
+    <rect x="40" y="240" width="120" height="32" rx="4" fill="var(--c7)" stroke="var(--output)"/>
+    <text x="100" y="260" text-anchor="middle" font-family="Inter,sans-serif" font-size="9.5" fill="var(--ink)">embedding 1</text>
+    <rect x="170" y="240" width="120" height="32" rx="4" fill="var(--c7)" stroke="var(--output)"/>
+    <text x="230" y="260" text-anchor="middle" font-family="Inter,sans-serif" font-size="9.5" fill="var(--ink)">embedding 2</text>
+    <rect x="300" y="240" width="120" height="32" rx="4" fill="var(--c7)" stroke="var(--output)"/>
+    <text x="360" y="260" text-anchor="middle" font-family="Inter,sans-serif" font-size="9.5" fill="var(--ink)">embedding 3</text>
+    <rect x="430" y="240" width="120" height="32" rx="4" fill="var(--c7)" stroke="var(--output)"/>
+    <text x="490" y="260" text-anchor="middle" font-family="Inter,sans-serif" font-size="9.5" fill="var(--ink)">embedding 4</text>
+    <rect x="560" y="240" width="120" height="32" rx="4" fill="var(--c7)" stroke="var(--output)"/>
+    <text x="620" y="260" text-anchor="middle" font-family="Inter,sans-serif" font-size="9.5" fill="var(--ink)">embedding 5</text>
+  </g>
+</svg>
+<div class="fc"><strong>Figure 5.</strong> Repeated feature grouping on C_001. Each of the five raw features generates one triple (itself plus its +1 and +3 neighbors, modulo 5). Every triple goes through the <em>same</em> linear layer to produce one <em>d</em>-dimensional embedding. Result: still five embeddings (the count is preserved) but each one now depends on three columns, breaking the symmetry that caused representation collapse in TabICL.</div>
+</div>
+
+<div class="c">
+
+<p class="rv">The shift pattern (0, 1, 3) is chosen so that for any table with seven or more columns, no pair of features ever appears together in more than one triple. That gives the model a richer mix of contexts without redundant information.</p>
+
+</div>
+
+<div class="c">
+
+<!-- ══════════ §6 TARGET-AWARE EMBEDDING ══════════ -->
+<h2 class="rv" id="target-aware">How a Row Becomes a Vector, Part 2: Target-Aware Embedding</h2>
+
+<p class="rv">Now the second TabICLv2-specific trick. We need the model to know which rows are training rows (with labels) and which is the test row (without). The previous generation, TabPFNv2, handled this by appending the target as an extra column. TabICLv2 does something cleaner: it adds a target embedding directly to every feature embedding of every training row.</p>
+
+<p class="rv">For C_001 (label = default), an embedding for "default" gets added to all five of its feature embeddings. Same for C_002 (label = no default) and C_003 (label = default). C_004 is the test row, so nothing is added. Every downstream layer can tell which is which by whether or not the target signal is present.</p>
+</div>
+
+<!-- FIG 6: target-aware embedding -->
+<div class="fig fw rv">
+<svg viewBox="0 0 740 280" xmlns="http://www.w3.org/2000/svg" style="max-width:680px">
+  <!-- Per-row column showing 5 embedding boxes + target embedding -->
+  <g font-family="Inter,sans-serif" font-size="9.5">
+    <text x="100" y="30" text-anchor="middle" font-weight="700" fill="var(--row-train)" letter-spacing=".06em">C_001</text>
+    <text x="240" y="30" text-anchor="middle" font-weight="700" fill="var(--row-train)" letter-spacing=".06em">C_002</text>
+    <text x="380" y="30" text-anchor="middle" font-weight="700" fill="var(--row-train)" letter-spacing=".06em">C_003</text>
+    <text x="520" y="30" text-anchor="middle" font-weight="700" fill="var(--row-test)" letter-spacing=".06em">C_004 (test)</text>
+  </g>
+
+  <!-- Feature embeddings (5 small boxes per row) -->
+  <g>
+    <!-- C_001 -->
+    <g transform="translate(40, 45)">
+      <rect width="120" height="14" rx="2" fill="var(--c7)" stroke="var(--output)"/>
+      <rect y="18" width="120" height="14" rx="2" fill="var(--c7)" stroke="var(--output)"/>
+      <rect y="36" width="120" height="14" rx="2" fill="var(--c7)" stroke="var(--output)"/>
+      <rect y="54" width="120" height="14" rx="2" fill="var(--c7)" stroke="var(--output)"/>
+      <rect y="72" width="120" height="14" rx="2" fill="var(--c7)" stroke="var(--output)"/>
+    </g>
+    <!-- C_002 -->
+    <g transform="translate(180, 45)">
+      <rect width="120" height="14" rx="2" fill="var(--c7)" stroke="var(--output)"/>
+      <rect y="18" width="120" height="14" rx="2" fill="var(--c7)" stroke="var(--output)"/>
+      <rect y="36" width="120" height="14" rx="2" fill="var(--c7)" stroke="var(--output)"/>
+      <rect y="54" width="120" height="14" rx="2" fill="var(--c7)" stroke="var(--output)"/>
+      <rect y="72" width="120" height="14" rx="2" fill="var(--c7)" stroke="var(--output)"/>
+    </g>
+    <!-- C_003 -->
+    <g transform="translate(320, 45)">
+      <rect width="120" height="14" rx="2" fill="var(--c7)" stroke="var(--output)"/>
+      <rect y="18" width="120" height="14" rx="2" fill="var(--c7)" stroke="var(--output)"/>
+      <rect y="36" width="120" height="14" rx="2" fill="var(--c7)" stroke="var(--output)"/>
+      <rect y="54" width="120" height="14" rx="2" fill="var(--c7)" stroke="var(--output)"/>
+      <rect y="72" width="120" height="14" rx="2" fill="var(--c7)" stroke="var(--output)"/>
+    </g>
+    <!-- C_004 -->
+    <g transform="translate(460, 45)">
+      <rect width="120" height="14" rx="2" fill="var(--row-test-bg)" stroke="var(--row-test)"/>
+      <rect y="18" width="120" height="14" rx="2" fill="var(--row-test-bg)" stroke="var(--row-test)"/>
+      <rect y="36" width="120" height="14" rx="2" fill="var(--row-test-bg)" stroke="var(--row-test)"/>
+      <rect y="54" width="120" height="14" rx="2" fill="var(--row-test-bg)" stroke="var(--row-test)"/>
+      <rect y="72" width="120" height="14" rx="2" fill="var(--row-test-bg)" stroke="var(--row-test)"/>
+    </g>
+    <text x="40" y="148" font-family="Inter,sans-serif" font-size="8" fill="var(--ink3)">5 feature</text>
+    <text x="40" y="158" font-family="Inter,sans-serif" font-size="8" fill="var(--ink3)">embeddings</text>
+  </g>
+
+  <!-- Plus signs and target embeddings -->
+  <g font-family="Inter,sans-serif" font-size="14" font-weight="600" fill="var(--ink2)" text-anchor="middle">
+    <text x="100" y="155">+</text>
+    <text x="240" y="155">+</text>
+    <text x="380" y="155">+</text>
+  </g>
+
+  <g>
+    <rect x="40" y="170" width="120" height="38" rx="5" fill="var(--row-train)" opacity="0.95"/>
+    <text x="100" y="187" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" font-weight="600" fill="#fff">target embed</text>
+    <text x="100" y="201" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#fff">"default"</text>
+
+    <rect x="180" y="170" width="120" height="38" rx="5" fill="var(--slate2)" opacity="0.95"/>
+    <text x="240" y="187" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" font-weight="600" fill="#fff">target embed</text>
+    <text x="240" y="201" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#fff">"no default"</text>
+
+    <rect x="320" y="170" width="120" height="38" rx="5" fill="var(--row-train)" opacity="0.95"/>
+    <text x="380" y="187" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" font-weight="600" fill="#fff">target embed</text>
+    <text x="380" y="201" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#fff">"default"</text>
+
+    <rect x="460" y="170" width="120" height="38" rx="5" fill="var(--bg2)" stroke="var(--bdr)" stroke-dasharray="4 3"/>
+    <text x="520" y="187" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" font-weight="600" fill="var(--ink3)">no target added</text>
+    <text x="520" y="201" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="var(--ink3)" font-style="italic">(this is the test row)</text>
+  </g>
+
+  <text x="370" y="245" text-anchor="middle" font-family="Inter,sans-serif" font-size="9.5" fill="var(--ink3)" font-style="italic">
+    Every downstream layer can immediately distinguish training rows (target signal present) from the test row (target signal absent).
+  </text>
+</svg>
+<div class="fc"><strong>Figure 6.</strong> Target-aware embedding. The model adds a label-specific vector to every feature embedding of every training row. The test row gets nothing added, and that absence is itself a signal. The paper's ablations identify this as one of three components (alongside the Muon optimizer and QASSMax) that each contribute roughly 100 Elo on validation datasets.</div>
+</div>
+
+<div class="c">
+
+<!-- ══════════ §7 COLUMN-WISE ATTENTION ══════════ -->
+<h2 class="rv" id="column-attention">Column-Wise Attention: Features Talking to Each Other</h2>
+
+<p class="rv">Now stage 1 actually runs. <code>TF_col</code> is a transformer that lets the features within a single row attend to each other. Why? Because raw values are ambiguous in isolation. <em>payment ratio = 0.12</em> alone could mean a customer who recently paid down a balance. <em>balance ratio = 0.93</em> AND <em>payment ratio = 0.12</em> AND <em>days delinquent = 14</em> together scream "this customer is in trouble." Column-wise attention lets the model learn these joint signals.</p>
+
+<p class="rv">The crucial detail: this stage runs independently for every row. C_001 attends only to C_001's features. C_002 attends only to C_002's. They never interact at this stage.</p>
+</div>
+
+<!-- FIG 7: column-wise attention within C_001 -->
+<div class="fig fw rv">
+<svg viewBox="0 0 740 240" xmlns="http://www.w3.org/2000/svg" style="max-width:680px">
+  <text x="370" y="25" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" font-weight="700" fill="var(--c2)" letter-spacing=".06em">INSIDE C_001 ONLY</text>
+
+  <!-- 5 features arranged horizontally with curved attention lines -->
+  <g>
+    <circle cx="120" cy="120" r="34" fill="var(--c7)" stroke="var(--output)" stroke-width="2"/>
+    <text x="120" y="115" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink)">bal ratio</text>
+    <text x="120" y="130" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="10" font-weight="600" fill="var(--ink)">0.93</text>
+
+    <circle cx="245" cy="120" r="34" fill="var(--c7)" stroke="var(--output)" stroke-width="2"/>
+    <text x="245" y="115" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink)">spend</text>
+    <text x="245" y="130" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="10" font-weight="600" fill="var(--ink)">0.45</text>
+
+    <circle cx="370" cy="120" r="34" fill="var(--c7)" stroke="var(--output)" stroke-width="2"/>
+    <text x="370" y="115" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink)">pay ratio</text>
+    <text x="370" y="130" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="10" font-weight="600" fill="var(--ink)">0.12</text>
+
+    <circle cx="495" cy="120" r="34" fill="var(--c7)" stroke="var(--output)" stroke-width="2"/>
+    <text x="495" y="115" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink)">days delq</text>
+    <text x="495" y="130" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="10" font-weight="600" fill="var(--ink)">14</text>
+
+    <circle cx="620" cy="120" r="34" fill="var(--c7)" stroke="var(--output)" stroke-width="2"/>
+    <text x="620" y="115" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink)">risk score</text>
+    <text x="620" y="130" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="10" font-weight="600" fill="var(--ink)">0.67</text>
+  </g>
+
+  <!-- Curved attention arrows (every feature to every other) -->
+  <g stroke="var(--c3)" fill="none" opacity="0.5">
+    <path d="M 120 86 Q 245 50 370 86" stroke-width="1.5"/>
+    <path d="M 245 86 Q 370 50 495 86" stroke-width="1.5"/>
+    <path d="M 370 86 Q 495 50 620 86" stroke-width="1.5"/>
+    <path d="M 120 154 Q 245 200 370 154" stroke-width="1.5"/>
+    <path d="M 245 154 Q 370 200 495 154" stroke-width="1.5"/>
+    <path d="M 370 154 Q 495 200 620 154" stroke-width="1.5"/>
+    <path d="M 120 86 Q 370 30 620 86" stroke-width="1.5"/>
+    <path d="M 120 154 Q 370 220 620 154" stroke-width="1.5"/>
+  </g>
+
+  <text x="370" y="220" text-anchor="middle" font-family="Inter,sans-serif" font-size="9.5" fill="var(--ink3)" font-style="italic">
+    Every feature attends to every other feature. C_002, C_003, C_004 all run their own pass in parallel; they do not interact here.
+  </text>
+</svg>
+<div class="fc"><strong>Figure 7.</strong> Column-wise attention inside C_001. The five feature embeddings (after grouping and target injection) attend to each other through TF_col. The output is five <em>enriched</em> feature embeddings: each one now encodes not just its own value but how that value relates to the rest of the row. Technically TF_col is a Set Transformer, which uses learnable "inducing points" to keep the cost linear in the number of columns rather than quadratic.</div>
+</div>
+
+<div class="c">
+
+<!-- ══════════ §8 ROW POOLING ══════════ -->
+<h2 class="rv" id="row-pooling">Row Pooling: Collapsing to One Vector Per Row</h2>
+
+<p class="rv">After column-wise attention, each row has five enriched feature embeddings. But for stage 3 to work, every row needs to be a <em>single</em> vector. That is what gets compared across rows. Stage 2 (TF_row) handles the compression with a <code>[CLS]</code> token, the same trick BERT uses to summarize a sentence into one vector.</p>
+</div>
+
+<!-- FIG 8: row pooling -->
+<div class="fig fw rv">
+<svg viewBox="0 0 740 200" xmlns="http://www.w3.org/2000/svg" style="max-width:680px">
+  <!-- Input: 5 enriched embeddings + CLS -->
+  <g>
+    <text x="40" y="30" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="var(--c2)" letter-spacing=".06em">C_001'S 5 ENRICHED FEATURES + [CLS]</text>
+
+    <rect x="40" y="50" width="50" height="30" rx="4" fill="var(--weight-bg)" stroke="var(--weight)" stroke-width="2" stroke-dasharray="4 2"/>
+    <text x="65" y="69" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" font-weight="700" fill="var(--ink)">[CLS]</text>
+
+    <rect x="100" y="50" width="50" height="30" rx="4" fill="var(--c7)" stroke="var(--output)"/>
+    <text x="125" y="69" text-anchor="middle" font-family="Inter,sans-serif" font-size="8.5" fill="var(--ink)">e1</text>
+    <rect x="160" y="50" width="50" height="30" rx="4" fill="var(--c7)" stroke="var(--output)"/>
+    <text x="185" y="69" text-anchor="middle" font-family="Inter,sans-serif" font-size="8.5" fill="var(--ink)">e2</text>
+    <rect x="220" y="50" width="50" height="30" rx="4" fill="var(--c7)" stroke="var(--output)"/>
+    <text x="245" y="69" text-anchor="middle" font-family="Inter,sans-serif" font-size="8.5" fill="var(--ink)">e3</text>
+    <rect x="280" y="50" width="50" height="30" rx="4" fill="var(--c7)" stroke="var(--output)"/>
+    <text x="305" y="69" text-anchor="middle" font-family="Inter,sans-serif" font-size="8.5" fill="var(--ink)">e4</text>
+    <rect x="340" y="50" width="50" height="30" rx="4" fill="var(--c7)" stroke="var(--output)"/>
+    <text x="365" y="69" text-anchor="middle" font-family="Inter,sans-serif" font-size="8.5" fill="var(--ink)">e5</text>
+  </g>
+
+  <!-- TF_row -->
+  <rect x="430" y="50" width="100" height="30" rx="6" fill="var(--ink)" stroke="var(--ink)"/>
+  <text x="480" y="69" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="#fff">TF_row</text>
+
+  <line x1="395" y1="65" x2="425" y2="65" stroke="#64748b" stroke-width="1.5" marker-end="url(#ar4)"/>
+  <line x1="535" y1="65" x2="565" y2="65" stroke="#64748b" stroke-width="1.5" marker-end="url(#ar4)"/>
+
+  <!-- Output: single CLS vector -->
+  <rect x="570" y="40" width="120" height="50" rx="6" fill="var(--row-train)" opacity="0.95"/>
+  <text x="630" y="60" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="#fff">h_C001</text>
+  <text x="630" y="76" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#fff">one row vector</text>
+
+  <text x="40" y="130" font-family="Inter,sans-serif" font-size="9.5" fill="var(--ink3)" font-style="italic">
+    The [CLS] token attends to all five enriched feature embeddings. Whatever the [CLS] token ends up encoding becomes
+  </text>
+  <text x="40" y="145" font-family="Inter,sans-serif" font-size="9.5" fill="var(--ink3)" font-style="italic">
+    the row vector: a single fixed-size summary of the entire row, ready for the next stage.
+  </text>
+
+  <defs>
+    <marker id="ar4" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#64748b"/>
+    </marker>
+  </defs>
+</svg>
+<div class="fc"><strong>Figure 8.</strong> Row pooling via TF_row. A learned [CLS] token is prepended to the row's enriched feature embeddings. After a transformer pass, the [CLS] output is the row vector: one summary vector per row. This is what enters stage 3.</div>
+</div>
+
+<div class="c">
+
+<!-- ══════════ §9 ROW VECTORS ══════════ -->
+<h2 class="rv" id="row-vectors">The Sequence of Row Vectors</h2>
+
+<p class="rv">Stages 1 and 2 ran four times in parallel, once for each customer. Now we have four row vectors: h_C001, h_C002, h_C003, and h_C004. Stack them. This sequence is what enters stage 3.</p>
+</div>
+
+<!-- FIG 9: row vector stack -->
+<div class="fig fw rv">
+<svg viewBox="0 0 740 220" xmlns="http://www.w3.org/2000/svg" style="max-width:620px">
+  <!-- Stack of 4 row vectors -->
+  <g>
+    <rect x="160" y="40" width="400" height="32" rx="5" fill="var(--row-train)" opacity="0.95"/>
+    <text x="178" y="60" font-family="Inter,sans-serif" font-size="11" font-weight="700" fill="#fff">h_C001</text>
+    <text x="544" y="60" text-anchor="end" font-family="Inter,sans-serif" font-size="9" fill="#fff" opacity="0.9">label visible to model: default</text>
+
+    <rect x="160" y="78" width="400" height="32" rx="5" fill="var(--row-train)" opacity="0.95"/>
+    <text x="178" y="98" font-family="Inter,sans-serif" font-size="11" font-weight="700" fill="#fff">h_C002</text>
+    <text x="544" y="98" text-anchor="end" font-family="Inter,sans-serif" font-size="9" fill="#fff" opacity="0.9">label visible to model: no default</text>
+
+    <rect x="160" y="116" width="400" height="32" rx="5" fill="var(--row-train)" opacity="0.95"/>
+    <text x="178" y="136" font-family="Inter,sans-serif" font-size="11" font-weight="700" fill="#fff">h_C003</text>
+    <text x="544" y="136" text-anchor="end" font-family="Inter,sans-serif" font-size="9" fill="#fff" opacity="0.9">label visible to model: default</text>
+
+    <rect x="160" y="154" width="400" height="32" rx="5" fill="var(--row-test)"/>
+    <text x="178" y="174" font-family="Inter,sans-serif" font-size="11" font-weight="700" fill="#fff">h_C004</text>
+    <text x="544" y="174" text-anchor="end" font-family="Inter,sans-serif" font-size="9" fill="#fff" opacity="0.9">label hidden, this is what we predict</text>
+  </g>
+
+  <text x="370" y="210" text-anchor="middle" font-family="Inter,sans-serif" font-size="9.5" fill="var(--ink3)" font-style="italic">
+    Four vectors. The bottom one is the test row. Stage 3 makes it talk to the others.
+  </text>
+</svg>
+<div class="fc"><strong>Figure 9.</strong> The four row vectors after stages 1 and 2. Three training rows (teal) carry their label signal through the target-aware embedding. The test row (dark cyan) does not. This is the sequence of tokens that enters stage 3.</div>
+</div>
+
+<div class="c">
+
+<!-- ══════════ §10 ROW-WISE ICL (QKV) ══════════ -->
+<h2 class="rv" id="row-icl">Row-Wise ICL: The In-Context Learning Step</h2>
+
+<p class="rv">This is the heart of in-context learning. The test row's vector h_C004 needs to find which training rows it resembles, then pull their label signal toward itself. Transformers do this with three projections: Query, Key, and Value. Each row vector is multiplied by three learned weight matrices to produce three new vectors per row.</p>
+</div>
+
+<!-- FIG 10: QKV projections -->
+<div class="fig fw rv">
+<svg viewBox="0 0 740 280" xmlns="http://www.w3.org/2000/svg" style="max-width:700px">
+  <text x="370" y="25" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" font-weight="700" fill="var(--c2)" letter-spacing=".06em">EVERY ROW VECTOR → 3 PROJECTIONS</text>
+
+  <!-- Row vectors on left -->
+  <g>
+    <rect x="40" y="60" width="80" height="22" rx="3" fill="var(--row-train)" opacity="0.95"/>
+    <text x="80" y="75" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" font-weight="700" fill="#fff">h_C001</text>
+    <rect x="40" y="100" width="80" height="22" rx="3" fill="var(--row-train)" opacity="0.95"/>
+    <text x="80" y="115" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" font-weight="700" fill="#fff">h_C002</text>
+    <rect x="40" y="140" width="80" height="22" rx="3" fill="var(--row-train)" opacity="0.95"/>
+    <text x="80" y="155" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" font-weight="700" fill="#fff">h_C003</text>
+    <rect x="40" y="180" width="80" height="22" rx="3" fill="var(--row-test)"/>
+    <text x="80" y="195" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" font-weight="700" fill="#fff">h_C004</text>
+  </g>
+
+  <!-- Weight matrices -->
+  <g font-family="JetBrains Mono,monospace" font-size="11" font-weight="700" text-anchor="middle">
+    <rect x="190" y="60" width="56" height="40" rx="4" fill="var(--weight-bg)" stroke="var(--weight)" stroke-width="2"/>
+    <text x="218" y="85" fill="var(--weight)">W_Q</text>
+
+    <rect x="190" y="120" width="56" height="40" rx="4" fill="var(--weight-bg)" stroke="var(--weight)" stroke-width="2"/>
+    <text x="218" y="145" fill="var(--weight)">W_K</text>
+
+    <rect x="190" y="180" width="56" height="40" rx="4" fill="var(--weight-bg)" stroke="var(--weight)" stroke-width="2"/>
+    <text x="218" y="205" fill="var(--weight)">W_V</text>
+  </g>
+
+  <!-- Arrows from row vectors to weights, then to outputs -->
+  <g stroke="#94a3b8" fill="none" opacity="0.6">
+    <line x1="120" y1="71" x2="185" y2="78"/>
+    <line x1="120" y1="111" x2="185" y2="138"/>
+    <line x1="120" y1="151" x2="185" y2="200"/>
+    <line x1="120" y1="191" x2="185" y2="80"/>
+  </g>
+
+  <!-- Q, K, V outputs -->
+  <g>
+    <text x="350" y="50" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="var(--c2)" letter-spacing=".06em">QUERIES</text>
+    <rect x="310" y="60" width="80" height="22" rx="3" fill="var(--c7)" stroke="var(--output)"/>
+    <text x="350" y="75" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink)">q_001</text>
+    <rect x="310" y="86" width="80" height="22" rx="3" fill="var(--c7)" stroke="var(--output)"/>
+    <text x="350" y="101" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink)">q_002</text>
+    <rect x="310" y="112" width="80" height="22" rx="3" fill="var(--c7)" stroke="var(--output)"/>
+    <text x="350" y="127" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink)">q_003</text>
+    <rect x="310" y="138" width="80" height="22" rx="3" fill="var(--row-test-bg)" stroke="var(--row-test)" stroke-width="2"/>
+    <text x="350" y="153" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" font-weight="700" fill="var(--ink)">q_004</text>
+
+    <text x="470" y="50" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="var(--c2)" letter-spacing=".06em">KEYS</text>
+    <rect x="430" y="60" width="80" height="22" rx="3" fill="var(--c7)" stroke="var(--output)"/>
+    <text x="470" y="75" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink)">k_001</text>
+    <rect x="430" y="86" width="80" height="22" rx="3" fill="var(--c7)" stroke="var(--output)"/>
+    <text x="470" y="101" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink)">k_002</text>
+    <rect x="430" y="112" width="80" height="22" rx="3" fill="var(--c7)" stroke="var(--output)"/>
+    <text x="470" y="127" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink)">k_003</text>
+    <rect x="430" y="138" width="80" height="22" rx="3" fill="var(--row-test-bg)" stroke="var(--row-test)"/>
+    <text x="470" y="153" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink)">k_004</text>
+
+    <text x="590" y="50" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="var(--c2)" letter-spacing=".06em">VALUES</text>
+    <rect x="550" y="60" width="80" height="22" rx="3" fill="var(--c7)" stroke="var(--output)"/>
+    <text x="590" y="75" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink)">v_001</text>
+    <rect x="550" y="86" width="80" height="22" rx="3" fill="var(--c7)" stroke="var(--output)"/>
+    <text x="590" y="101" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink)">v_002</text>
+    <rect x="550" y="112" width="80" height="22" rx="3" fill="var(--c7)" stroke="var(--output)"/>
+    <text x="590" y="127" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink)">v_003</text>
+    <rect x="550" y="138" width="80" height="22" rx="3" fill="var(--row-test-bg)" stroke="var(--row-test)"/>
+    <text x="590" y="153" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink)">v_004</text>
+  </g>
+
+  <text x="370" y="245" text-anchor="middle" font-family="Inter,sans-serif" font-size="9.5" fill="var(--ink3)" font-style="italic">
+    W_Q, W_K, W_V are learned during pre-training. They are the same for every row; only the inputs differ.
+  </text>
+</svg>
+<div class="fc"><strong>Figure 10.</strong> Each row vector h gets projected into three new vectors (q, k, v) by three learned weight matrices. The matrices are shared across all rows. C_004's q_004 is what we will compare against every training row's k.</div>
+</div>
+
+<div class="c">
+
+<p class="rv"><span class="step-num">First step</span> Compute the dot product between C_004's query and every training row's key. This produces a similarity score for each candidate.</p>
+</div>
+
+<div class="fig fw rv">
+<div class="mb" id="fmla-qkv-score"></div>
+<div class="qkv-grid">
+  <div class="qkv-cell">
+    <div class="qkv-label">q_004 · k_001</div>
+    <div style="font-size:1.1rem;color:var(--row-train);font-weight:600">4.8</div>
+    <div style="font-family:var(--ui);font-size:0.7rem;color:var(--ink3);margin-top:0.3rem">high similarity</div>
+  </div>
+  <div class="qkv-cell">
+    <div class="qkv-label">q_004 · k_002</div>
+    <div style="font-size:1.1rem;color:var(--slate2);font-weight:600">0.4</div>
+    <div style="font-family:var(--ui);font-size:0.7rem;color:var(--ink3);margin-top:0.3rem">low similarity</div>
+  </div>
+  <div class="qkv-cell">
+    <div class="qkv-label">q_004 · k_003</div>
+    <div style="font-size:1.1rem;color:var(--row-train);font-weight:600">4.6</div>
+    <div style="font-family:var(--ui);font-size:0.7rem;color:var(--ink3);margin-top:0.3rem">high similarity</div>
+  </div>
+</div>
+<div class="fc"><strong>Figure 11.</strong> Dot-product similarity scores. C_004 looks like C_001 and C_003 (both defaulters), and not much like C_002 (no default). These are illustrative numbers chosen to match the obvious feature pattern in our running example.</div>
+</div>
+
+<div class="c">
+
+<p class="rv"><span class="step-num">Second step</span> Divide by √d_k (where d_k is the head dimension) to keep dot products from blowing up at high dimensions, then apply softmax to turn the scores into a probability distribution. The result is a set of attention weights that sum to 1.</p>
+</div>
+
+<div class="fig fw rv q-slider-fig">
+<div class="q-bars" id="qkv-bars"></div>
+<div class="fc"><strong>Figure 12.</strong> Attention weights after softmax(scores / √d_k). The model puts most of its attention on C_001 and C_003, both defaulters. The combined attention on default-class training rows is <strong id="qkv-default-weight" style="color:var(--row-test)">…</strong>. In plain English: the model is paying about 94% of its attention to customers who defaulted. That signal will dominate the next step.</div>
+</div>
+
+<div class="c">
+
+<p class="rv"><span class="step-num">Third step</span> Take a weighted sum of the value vectors using these attention weights. The result is a new vector for C_004. Its representation is now enriched by the values of the rows it most resembles. Because those rows carry the "default" target signal that was injected back in stage 1, that signal flows through and ends up dominating C_004's enriched representation.</p>
+
+<div class="callout rv">
+  <div class="callout-label">The trick</div>
+  <p>The training labels were never an output the model is asked to predict in this single step. They were baked into the row vectors as input features, way back in target-aware embedding. By the time row-wise ICL runs, "find similar rows" and "copy their label" have already become the same operation, because similar rows literally have the label signal stored in their value vectors.</p>
+</div>
+
+<!-- ══════════ §11 WHY QKV ══════════ -->
+<h2 class="rv" id="qkv-why">Why Q, K, V Are Three Separate Things</h2>
+
+<p class="rv">It looks like overkill. Three different projections of the same row vector. Here is the library analogy that makes it click. You walk into a library looking for something. The <strong>query</strong> is what you want ("books about default risk"). The <strong>key</strong> is what each book advertises on its spine ("Credit Risk Modeling," the topic in shorthand). The <strong>value</strong> is what is actually inside the book: the chapters, examples, equations.</p>
+
+<p class="rv">You match your query against keys to figure out which books to pull off the shelf. Then you read the values of those books to learn something. The keys advertise; the values deliver. Separating them lets the model learn one thing for "what should match" and another for "what to extract once matched." For tabular ICL this is exactly the right structure: match rows on their <em>features</em>, but extract from them the <em>label-flavored representation</em>.</p>
+
+<!-- ══════════ §12 MASKING ══════════ -->
+<h2 class="rv" id="masking">Masking</h2>
+
+<p class="rv">Masking does two jobs in TabICLv2, and they are easy to confuse.</p>
+
+<p class="rv"><strong>Label masking</strong> is the bigger one. The test row's label is hidden from the input. C_004 enters the pipeline with no target embedding added; that is the masking. Without this, the model would learn to copy the label directly and never need to attend to anything. The whole prediction task only exists because we hide the answer.</p>
+</div>
+
+<!-- FIG 13: masking -->
+<div class="fig fw rv">
+<svg viewBox="0 0 740 220" xmlns="http://www.w3.org/2000/svg" style="max-width:680px">
+  <!-- Training rows with target -->
+  <g>
+    <text x="40" y="30" font-family="Inter,sans-serif" font-size="11" font-weight="700" fill="var(--c2)" letter-spacing=".06em">WHAT THE MODEL SEES</text>
+
+    <g>
+      <rect x="40" y="50" width="240" height="28" rx="4" fill="var(--row-train-bg)" stroke="var(--row-train)"/>
+      <text x="55" y="68" font-family="Inter,sans-serif" font-size="9.5" fill="var(--ink)">C_001 features</text>
+      <text x="170" y="68" font-family="Inter,sans-serif" font-size="9.5" fill="var(--row-train)" font-weight="700">+ "default"</text>
+
+      <rect x="40" y="84" width="240" height="28" rx="4" fill="var(--row-train-bg)" stroke="var(--row-train)"/>
+      <text x="55" y="102" font-family="Inter,sans-serif" font-size="9.5" fill="var(--ink)">C_002 features</text>
+      <text x="170" y="102" font-family="Inter,sans-serif" font-size="9.5" fill="var(--row-train)" font-weight="700">+ "no default"</text>
+
+      <rect x="40" y="118" width="240" height="28" rx="4" fill="var(--row-train-bg)" stroke="var(--row-train)"/>
+      <text x="55" y="136" font-family="Inter,sans-serif" font-size="9.5" fill="var(--ink)">C_003 features</text>
+      <text x="170" y="136" font-family="Inter,sans-serif" font-size="9.5" fill="var(--row-train)" font-weight="700">+ "default"</text>
+
+      <rect x="40" y="152" width="240" height="28" rx="4" fill="var(--row-test-bg)" stroke="var(--row-test)" stroke-width="2"/>
+      <text x="55" y="170" font-family="Inter,sans-serif" font-size="9.5" fill="var(--ink)">C_004 features</text>
+      <text x="200" y="170" font-family="Inter,sans-serif" font-size="9.5" fill="var(--masked)" font-weight="700" font-style="italic">[ MASKED ]</text>
+    </g>
+  </g>
+
+  <!-- Attention matrix -->
+  <g>
+    <text x="450" y="30" font-family="Inter,sans-serif" font-size="11" font-weight="700" fill="var(--c2)" letter-spacing=".06em">ATTENTION MATRIX</text>
+
+    <text x="430" y="55" font-family="Inter,sans-serif" font-size="8" fill="var(--ink3)">attended to →</text>
+    <text x="380" y="100" font-family="Inter,sans-serif" font-size="8" fill="var(--ink3)" transform="rotate(-90, 380, 100)">attending</text>
+
+    <!-- 4x4 grid -->
+    <g>
+      <rect x="430" y="62" width="50" height="20" fill="var(--c7)"/>
+      <rect x="480" y="62" width="50" height="20" fill="var(--c7)"/>
+      <rect x="530" y="62" width="50" height="20" fill="var(--c7)"/>
+      <rect x="580" y="62" width="50" height="20" fill="var(--masked-bg)"/>
+
+      <rect x="430" y="82" width="50" height="20" fill="var(--c7)"/>
+      <rect x="480" y="82" width="50" height="20" fill="var(--c7)"/>
+      <rect x="530" y="82" width="50" height="20" fill="var(--c7)"/>
+      <rect x="580" y="82" width="50" height="20" fill="var(--masked-bg)"/>
+
+      <rect x="430" y="102" width="50" height="20" fill="var(--c7)"/>
+      <rect x="480" y="102" width="50" height="20" fill="var(--c7)"/>
+      <rect x="530" y="102" width="50" height="20" fill="var(--c7)"/>
+      <rect x="580" y="102" width="50" height="20" fill="var(--masked-bg)"/>
+
+      <rect x="430" y="122" width="50" height="20" fill="var(--row-test-bg)"/>
+      <rect x="480" y="122" width="50" height="20" fill="var(--row-test-bg)"/>
+      <rect x="530" y="122" width="50" height="20" fill="var(--row-test-bg)"/>
+      <rect x="580" y="122" width="50" height="20" fill="var(--masked-bg)"/>
+
+      <!-- Grid lines -->
+      <g stroke="var(--bdr)" stroke-width="0.5">
+        <line x1="430" y1="62" x2="630" y2="62"/>
+        <line x1="430" y1="82" x2="630" y2="82"/>
+        <line x1="430" y1="102" x2="630" y2="102"/>
+        <line x1="430" y1="122" x2="630" y2="122"/>
+        <line x1="430" y1="142" x2="630" y2="142"/>
+        <line x1="430" y1="62" x2="430" y2="142"/>
+        <line x1="480" y1="62" x2="480" y2="142"/>
+        <line x1="530" y1="62" x2="530" y2="142"/>
+        <line x1="580" y1="62" x2="580" y2="142"/>
+        <line x1="630" y1="62" x2="630" y2="142"/>
+      </g>
+
+      <!-- ✗ in masked column -->
+      <text x="605" y="76" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" font-weight="700" fill="var(--masked)">−∞</text>
+      <text x="605" y="96" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" font-weight="700" fill="var(--masked)">−∞</text>
+      <text x="605" y="116" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" font-weight="700" fill="var(--masked)">−∞</text>
+      <text x="605" y="136" text-anchor="middle" font-family="Inter,sans-serif" font-size="11" font-weight="700" fill="var(--masked)">−∞</text>
+
+      <!-- Row/col labels -->
+      <text x="455" y="158" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="var(--ink3)">001</text>
+      <text x="505" y="158" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="var(--ink3)">002</text>
+      <text x="555" y="158" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="var(--ink3)">003</text>
+      <text x="605" y="158" text-anchor="middle" font-family="Inter,sans-serif" font-size="8" fill="var(--masked)">004</text>
+
+      <text x="425" y="76" text-anchor="end" font-family="Inter,sans-serif" font-size="8" fill="var(--ink3)">001</text>
+      <text x="425" y="96" text-anchor="end" font-family="Inter,sans-serif" font-size="8" fill="var(--ink3)">002</text>
+      <text x="425" y="116" text-anchor="end" font-family="Inter,sans-serif" font-size="8" fill="var(--ink3)">003</text>
+      <text x="425" y="136" text-anchor="end" font-family="Inter,sans-serif" font-size="8" fill="var(--row-test)" font-weight="700">004</text>
+    </g>
+
+    <text x="530" y="180" text-anchor="middle" font-family="Inter,sans-serif" font-size="8.5" fill="var(--ink3)" font-style="italic">No row attends to C_004's position. softmax(−∞) = 0.</text>
+  </g>
+</svg>
+<div class="fc"><strong>Figure 13.</strong> The two jobs of masking. Left: C_004's label is removed from the input, which is what creates the prediction task in the first place. Right: in TF_icl, the attention matrix has C_004's position blocked with −∞ scores, so softmax sends those weights to exactly zero. No row, including C_004 itself, attends to a label that is not there.</div>
+</div>
+
+<div class="c">
+
+<p class="rv">The −∞ trick works because softmax exponentiates first. exp(−∞) = 0, so the weight on that path is precisely zero. No need to special-case anything in the math. Just inject the −∞ before the softmax and the rest of the pipeline behaves correctly.</p>
+
+</div>
+
+<div class="c">
+
+<!-- ══════════ §13 QASSMAX ══════════ -->
+<h2 class="rv" id="qassmax">Attention Fading and QASSMax</h2>
+
+<p class="rv">Now we get to TabICLv2's headline architectural contribution. Standard softmax has a problem at scale that does not show up in our four-row toy example but bites hard when you scale to real datasets. The denominator of the softmax is a sum over every row in the context. Push from 1,000 rows to 1,000,000 rows and that denominator grows roughly proportionally to <em>n</em>. Even if C_004's "true" similarity to one specific anchor row is enormous, the resulting attention weight gets washed out across the sea of other rows. <a class="r" href="https://arxiv.org/abs/2502.05564" target="_blank" rel="noopener noreferrer">TabICL trained on tables of up to 60K rows</a>, and its attention started to flatten when pushed beyond that. This is called <strong>attention fading</strong>.</p>
+
+<p class="rv">TabICLv2's fix is <strong>QASSMax</strong>, short for Query-Aware Scalable Softmax. The intuition is simple: scale the queries by something that grows with log(<em>n</em>) before computing softmax. As the dataset grows, queries get scaled up, dot-product magnitudes grow with them, and softmax stays sharp. <a class="r" href="https://arxiv.org/abs/2501.19399" target="_blank" rel="noopener noreferrer">A theoretical result</a> shows that log(<em>n</em>) scaling is exactly the right rate to maintain attention sharpness as <em>n</em> grows.</p>
+
+<div class="mb rv" id="fmla-qassmax"></div>
+
+<p class="rv">Drag the slider below. The left chart is what standard softmax does as the dataset grows. The right is QASSMax. Both have one anchor row that is genuinely relevant and (n−1) noise rows that are not.</p>
+
+</div>
+
+<!-- FIG 14: attention fading interactive -->
+<div class="fig fw rv q-slider-fig" id="fade-fig">
+  <div class="fig-2col">
+    <div>
+      <h4>Standard softmax</h4>
+      <div class="q-bars" id="fade-bars-flat"></div>
+      <div style="text-align:center;margin-top:0.5rem;font-family:var(--ui);font-size:0.8rem;color:var(--ink2)">Anchor / noise ratio: <strong id="fade-ratio-flat" style="color:var(--masked)">…</strong></div>
+    </div>
+    <div>
+      <h4>QASSMax (queries scaled by log n)</h4>
+      <div class="q-bars" id="fade-bars-sharp"></div>
+      <div style="text-align:center;margin-top:0.5rem;font-family:var(--ui);font-size:0.8rem;color:var(--ink2)">Anchor / noise ratio: <strong id="fade-ratio-sharp" style="color:var(--row-train)">…</strong></div>
+    </div>
+  </div>
+
+  <div style="max-width:520px;margin:1.2rem auto 0">
+    <div class="sr">
+      <label class="sl" for="fade-n-slider">Dataset size n</label>
+      <input type="range" id="fade-n-slider" min="1" max="6" step="0.1" value="2">
+      <span class="sv" id="fade-n-val">100</span>
+    </div>
+  </div>
+
+  <div class="fc"><strong>Figure 14.</strong> The attention-fading effect. As <em>n</em> climbs from 100 to 1,000,000, standard softmax flattens. Even the genuinely relevant anchor row gets a weight indistinguishable from noise. QASSMax keeps the anchor row visibly above the noise floor across orders of magnitude. This is what lets TabICLv2 generalize to million-row tables despite being pre-trained on contexts up to 60K rows.</div>
+</div>
+
+<div class="c">
+
+<p class="rv">In TabICLv2's actual implementation, the scaling factor is not just <code>log(n) · s</code> but a small per-element MLP, plus a query-dependent gate. The principle is identical; the parameterization is more expressive.</p>
+
+<!-- ══════════ §14 TRAINING ══════════ -->
+<h2 class="rv" id="training">Where the Weights Came From</h2>
+
+<p class="rv">We have spent thirteen sections looking at the architecture without saying where W_Q, W_K, W_V, the linear layers, and the QASSMax MLPs actually come from. Here is the training loop.</p>
+</div>
+
+<!-- FIG 15: training loop -->
+<div class="fig fw rv">
+<svg viewBox="0 0 740 280" xmlns="http://www.w3.org/2000/svg" style="max-width:680px">
+  <!-- Step boxes in a circular arrangement -->
+  <g>
+    <rect x="40" y="40" width="160" height="50" rx="6" fill="#fff" stroke="var(--c2)" stroke-width="2"/>
+    <text x="120" y="58" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="var(--c2)">1. SAMPLE A DATASET</text>
+    <text x="120" y="74" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink2)">Fresh synthetic table</text>
+    <text x="120" y="86" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink2)">from the prior</text>
+
+    <rect x="290" y="40" width="160" height="50" rx="6" fill="#fff" stroke="var(--c2)" stroke-width="2"/>
+    <text x="370" y="58" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="var(--c2)">2. MASK TEST LABELS</text>
+    <text x="370" y="74" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink2)">Random split into</text>
+    <text x="370" y="86" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink2)">train + test rows</text>
+
+    <rect x="540" y="40" width="160" height="50" rx="6" fill="#fff" stroke="var(--c2)" stroke-width="2"/>
+    <text x="620" y="58" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="var(--c2)">3. FORWARD PASS</text>
+    <text x="620" y="74" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink2)">All three stages,</text>
+    <text x="620" y="86" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink2)">L stacked layers</text>
+
+    <rect x="540" y="130" width="160" height="50" rx="6" fill="#fff" stroke="var(--c2)" stroke-width="2"/>
+    <text x="620" y="148" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="var(--c2)">4. COMPUTE LOSS</text>
+    <text x="620" y="164" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink2)">Cross-entropy on test row</text>
+    <text x="620" y="176" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink2)">predictions vs true labels</text>
+
+    <rect x="290" y="130" width="160" height="50" rx="6" fill="#fff" stroke="var(--c2)" stroke-width="2"/>
+    <text x="370" y="148" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="var(--c2)">5. BACKPROP</text>
+    <text x="370" y="164" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink2)">Gradients flow back into</text>
+    <text x="370" y="176" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink2)">all weight matrices</text>
+
+    <rect x="40" y="130" width="160" height="50" rx="6" fill="#fff" stroke="var(--c2)" stroke-width="2"/>
+    <text x="120" y="148" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" font-weight="700" fill="var(--c2)">6. UPDATE</text>
+    <text x="120" y="164" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink2)">Muon optimizer step</text>
+    <text x="120" y="176" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--ink2)">on all parameters</text>
+  </g>
+
+  <!-- Arrows -->
+  <g stroke="var(--c2)" fill="none" stroke-width="2">
+    <line x1="200" y1="65" x2="285" y2="65" marker-end="url(#ar5)"/>
+    <line x1="450" y1="65" x2="535" y2="65" marker-end="url(#ar5)"/>
+    <line x1="620" y1="90" x2="620" y2="125" marker-end="url(#ar5)"/>
+    <line x1="540" y1="155" x2="455" y2="155" marker-end="url(#ar5)"/>
+    <line x1="290" y1="155" x2="205" y2="155" marker-end="url(#ar5)"/>
+    <!-- Loop arrow from box 6 left edge, around the outside, back to box 1 left edge -->
+    <path d="M 40 155 L 18 155 Q 8 155 8 145 L 8 75 Q 8 65 18 65 L 35 65" marker-end="url(#ar5)"/>
+  </g>
+  <text x="370" y="115" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="var(--c2)" font-style="italic" font-weight="600">~550K iterations across three stages</text>
+
+  <text x="370" y="240" text-anchor="middle" font-family="Inter,sans-serif" font-size="10.5" fill="var(--ink2)" font-weight="600">
+    Crucial: every iteration uses a brand-new synthetic dataset.
+  </text>
+  <text x="370" y="256" text-anchor="middle" font-family="Inter,sans-serif" font-size="9.5" fill="var(--ink3)" font-style="italic">
+    The model never sees the same table twice. Memorizing any specific dataset is therefore worthless.
+  </text>
+
+  <defs>
+    <marker id="ar5" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="var(--c2)"/>
+    </marker>
+  </defs>
+</svg>
+<div class="fc"><strong>Figure 15.</strong> The training loop. The headline number: roughly 24.5 H100-days of pre-training. ~550K total iterations across three stages, batch size 64, with each iteration sampling a completely fresh synthetic table.</div>
+</div>
+
+<div class="c">
+
+<p class="rv">The training data is not a fixed dataset. It is a <strong>generative process</strong>, a procedural prior that samples a new synthetic table on every step. The recipe: sample a random directed acyclic graph; at each node, place a random function (MLP, tree ensemble, Gaussian process, polynomial, plateau function, or product of these); sample input vectors at the root nodes; propagate them through the graph; extract some columns as features and one as the target. Throw away datasets where the target is independent of the features. Repeat about 35 million times.</p>
+
+<p class="rv">Here is the central insight that makes pre-training work at all. <strong>Because every iteration uses a different dataset, memorizing any specific one is worthless.</strong> The optimizer cannot lower loss by getting really good at one table; by next step, that table is gone forever. The only thing that consistently lowers loss across millions of distinct datasets is <em>the general skill of reading a tabular context to predict a held-out row.</em> That skill is what gets compressed into the weights. In meta-learning terms, the prior is the inner-loop task distribution, and the outer loop is gradient descent on the model's ability to handle that whole distribution at once.</p>
+
+<div class="mb rv" id="fmla-loss"></div>
+
+<p class="rv">The loss is just expected negative log-likelihood of the test row's true label, averaged over all sampled datasets. Concretely: every gradient step pushes W_Q, W_K, W_V to make the rows that share a label produce higher dot products than rows that do not, because that is what consistently makes the test-row prediction correct, regardless of what dataset we are looking at.</p>
+
+<!-- ══════════ §15 STACKING ══════════ -->
+<h2 class="rv" id="stacking">Stacking Layers</h2>
+
+<p class="rv">One pass of TF_col → TF_row → TF_icl is not enough. TabICLv2 stacks these into L layers. Early layers learn basic feature-feature interactions and rough row-row matches; deeper layers refine these into sharper, more abstract patterns.</p>
+</div>
+
+<!-- FIG 16: stacked layers -->
+<div class="fig fw rv">
+<svg viewBox="0 0 740 220" xmlns="http://www.w3.org/2000/svg" style="max-width:680px">
+  <g font-family="Inter,sans-serif" font-size="9.5">
+    <text x="370" y="25" text-anchor="middle" font-weight="700" fill="var(--c2)" font-size="11" letter-spacing=".06em">L STACKED LAYERS</text>
+
+    <!-- 4 layer copies -->
+    <g>
+      <rect x="40" y="60" width="160" height="100" rx="8" fill="var(--bg2)" stroke="var(--bdr)" opacity="0.9"/>
+      <text x="120" y="85" text-anchor="middle" font-weight="700" fill="var(--ink2)">Layer 1</text>
+      <rect x="55" y="95" width="130" height="14" rx="2" fill="#fff" stroke="var(--c2)" stroke-width="1"/>
+      <text x="120" y="105" text-anchor="middle" font-size="8" fill="var(--ink2)">TF_col</text>
+      <rect x="55" y="111" width="130" height="14" rx="2" fill="#fff" stroke="var(--c2)" stroke-width="1"/>
+      <text x="120" y="121" text-anchor="middle" font-size="8" fill="var(--ink2)">TF_row</text>
+      <rect x="55" y="127" width="130" height="14" rx="2" fill="#fff" stroke="var(--row-test)" stroke-width="1"/>
+      <text x="120" y="137" text-anchor="middle" font-size="8" fill="var(--ink2)">TF_icl</text>
+
+      <rect x="220" y="60" width="160" height="100" rx="8" fill="var(--bg2)" stroke="var(--bdr)" opacity="0.9"/>
+      <text x="300" y="85" text-anchor="middle" font-weight="700" fill="var(--ink2)">Layer 2</text>
+      <rect x="235" y="95" width="130" height="14" rx="2" fill="#fff" stroke="var(--c2)" stroke-width="1"/>
+      <text x="300" y="105" text-anchor="middle" font-size="8" fill="var(--ink2)">TF_col</text>
+      <rect x="235" y="111" width="130" height="14" rx="2" fill="#fff" stroke="var(--c2)" stroke-width="1"/>
+      <text x="300" y="121" text-anchor="middle" font-size="8" fill="var(--ink2)">TF_row</text>
+      <rect x="235" y="127" width="130" height="14" rx="2" fill="#fff" stroke="var(--row-test)" stroke-width="1"/>
+      <text x="300" y="137" text-anchor="middle" font-size="8" fill="var(--ink2)">TF_icl</text>
+
+      <text x="430" y="118" text-anchor="middle" font-size="20" fill="var(--ink3)">···</text>
+
+      <rect x="480" y="60" width="160" height="100" rx="8" fill="var(--bg2)" stroke="var(--bdr)" opacity="0.9"/>
+      <text x="560" y="85" text-anchor="middle" font-weight="700" fill="var(--ink2)">Layer L</text>
+      <rect x="495" y="95" width="130" height="14" rx="2" fill="#fff" stroke="var(--c2)" stroke-width="1"/>
+      <text x="560" y="105" text-anchor="middle" font-size="8" fill="var(--ink2)">TF_col</text>
+      <rect x="495" y="111" width="130" height="14" rx="2" fill="#fff" stroke="var(--c2)" stroke-width="1"/>
+      <text x="560" y="121" text-anchor="middle" font-size="8" fill="var(--ink2)">TF_row</text>
+      <rect x="495" y="127" width="130" height="14" rx="2" fill="#fff" stroke="var(--row-test)" stroke-width="1"/>
+      <text x="560" y="137" text-anchor="middle" font-size="8" fill="var(--ink2)">TF_icl</text>
+    </g>
+
+    <line x1="200" y1="110" x2="218" y2="110" stroke="var(--c2)" stroke-width="1.5" marker-end="url(#ar6)"/>
+    <line x1="380" y1="110" x2="402" y2="110" stroke="var(--c2)" stroke-width="1.5" marker-end="url(#ar6)"/>
+    <line x1="455" y1="110" x2="478" y2="110" stroke="var(--c2)" stroke-width="1.5" marker-end="url(#ar6)"/>
+
+    <text x="120" y="185" text-anchor="middle" font-size="8.5" fill="var(--ink3)" font-style="italic">basic feature-row matches</text>
+    <text x="560" y="185" text-anchor="middle" font-size="8.5" fill="var(--ink3)" font-style="italic">sharper, more abstract</text>
+  </g>
+
+  <defs>
+    <marker id="ar6" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="var(--c2)"/>
+    </marker>
+  </defs>
+</svg>
+<div class="fc"><strong>Figure 16.</strong> The full stack. Each layer takes the previous layer's row vectors, runs them through the same three-stage architecture, and produces refined row vectors for the next layer. The W_Q, W_K, W_V matrices are different per layer; every layer learns its own attention patterns.</div>
+</div>
+
+<div class="c">
+
+<!-- ══════════ §16 END-TO-END ══════════ -->
+<h2 class="rv" id="end-to-end">Putting It All Together</h2>
+
+<p class="rv">No new concepts in this section. Just the full picture in one diagram, tracing C_004 from raw input to final prediction.</p>
+</div>
+
+<!-- FIG 17: end to end -->
+<div class="fig fw rv">
+<svg viewBox="0 0 740 390" xmlns="http://www.w3.org/2000/svg" style="max-width:700px">
+  <!-- Vertical pipeline -->
+  <g font-family="Inter,sans-serif" font-size="10">
+    <!-- Step 1: raw row -->
+    <rect x="240" y="20" width="260" height="34" rx="5" fill="var(--row-test-bg)" stroke="var(--row-test)" stroke-width="1.5"/>
+    <text x="370" y="35" text-anchor="middle" font-weight="700" fill="var(--ink)">C_004 raw features</text>
+    <text x="370" y="48" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="8.5" fill="var(--ink2)">[0.88, 0.52, 0.11, 18, 0.71]</text>
+
+    <!-- Step 2: feature grouping -->
+    <rect x="240" y="68" width="260" height="34" rx="5" fill="#fff" stroke="var(--c2)"/>
+    <text x="370" y="83" text-anchor="middle" font-weight="700" fill="var(--ink)">Repeated feature grouping</text>
+    <text x="370" y="96" text-anchor="middle" font-size="8.5" fill="var(--ink3)">5 overlapping triples → 5 embeddings</text>
+
+    <!-- Step 3: target embed (skipped for test row) -->
+    <rect x="240" y="116" width="260" height="34" rx="5" fill="var(--bg2)" stroke="var(--bdr)" stroke-dasharray="4 3"/>
+    <text x="370" y="131" text-anchor="middle" font-weight="700" fill="var(--ink3)">Target-aware embedding</text>
+    <text x="370" y="144" text-anchor="middle" font-size="8.5" fill="var(--ink3)" font-style="italic">(skipped, this is the test row)</text>
+
+    <!-- Step 4: TF_col -->
+    <rect x="240" y="164" width="260" height="34" rx="5" fill="#fff" stroke="var(--c2)"/>
+    <text x="370" y="179" text-anchor="middle" font-weight="700" fill="var(--ink)">Stage 1: TF_col</text>
+    <text x="370" y="192" text-anchor="middle" font-size="8.5" fill="var(--ink3)">5 enriched feature embeddings</text>
+
+    <!-- Step 5: TF_row -->
+    <rect x="240" y="212" width="260" height="34" rx="5" fill="#fff" stroke="var(--c2)"/>
+    <text x="370" y="227" text-anchor="middle" font-weight="700" fill="var(--ink)">Stage 2: TF_row</text>
+    <text x="370" y="240" text-anchor="middle" font-size="8.5" fill="var(--ink3)">one row vector h_C004</text>
+
+    <!-- Step 6: TF_icl + QASSMax -->
+    <rect x="240" y="260" width="260" height="34" rx="5" fill="#0f172a" stroke="var(--row-test)" stroke-width="1.5"/>
+    <text x="370" y="275" text-anchor="middle" font-weight="700" fill="#fff">Stage 3: TF_icl + QASSMax</text>
+    <text x="370" y="288" text-anchor="middle" font-size="8.5" fill="#94a3b8">attends to C_001, C_003 most</text>
+
+    <!-- Step 7: classification head -->
+    <rect x="240" y="308" width="260" height="34" rx="5" fill="var(--output)"/>
+    <text x="370" y="323" text-anchor="middle" font-weight="700" fill="#fff">Classification head</text>
+    <text x="370" y="336" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="9" fill="#fff">p(default | C_004) = 0.87</text>
+
+    <!-- Vertical connectors: each from box bottom (y+34) to next box top minus 2 -->
+    <g stroke="#94a3b8" stroke-width="1.5" fill="none">
+      <line x1="370" y1="54" x2="370" y2="66" marker-end="url(#ar7)"/>
+      <line x1="370" y1="102" x2="370" y2="114" marker-end="url(#ar7)"/>
+      <line x1="370" y1="150" x2="370" y2="162" marker-end="url(#ar7)"/>
+      <line x1="370" y1="198" x2="370" y2="210" marker-end="url(#ar7)"/>
+      <line x1="370" y1="246" x2="370" y2="258" marker-end="url(#ar7)"/>
+      <line x1="370" y1="294" x2="370" y2="306" marker-end="url(#ar7)"/>
+    </g>
+
+    <!-- Side annotations (align with each box's vertical center, y+22 for box top y) -->
+    <text x="510" y="42" font-size="8" fill="var(--ink3)" font-style="italic">→ five raw values</text>
+    <text x="510" y="90" font-size="8" fill="var(--ink3)" font-style="italic">→ break feature symmetry</text>
+    <text x="510" y="138" font-size="8" fill="var(--ink3)" font-style="italic">→ training rows do get this</text>
+    <text x="510" y="186" font-size="8" fill="var(--ink3)" font-style="italic">→ features attend within row</text>
+    <text x="510" y="234" font-size="8" fill="var(--ink3)" font-style="italic">→ [CLS] pools to one vector</text>
+    <text x="510" y="282" font-size="8" fill="var(--ink3)" font-style="italic">→ rows attend across dataset</text>
+    <text x="510" y="330" font-size="8" fill="var(--ink3)" font-style="italic">→ probability over classes</text>
+  </g>
+
+  <text x="370" y="372" text-anchor="middle" font-family="Inter,sans-serif" font-size="10" fill="var(--ink2)" font-style="italic">
+    All of this happens L times in stacked layers. The whole thing is one forward pass. No gradients. No fitting on your data.
+  </text>
+
+  <defs>
+    <marker id="ar7" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#94a3b8"/>
+    </marker>
+  </defs>
+</svg>
+<div class="fc"><strong>Figure 17.</strong> The complete pipeline, traced for C_004 specifically. Raw row in at the top, predicted probability out at the bottom. The layer stack is omitted to keep the diagram readable; imagine all of this running L times.</div>
+</div>
+
+<div class="c">
+
+<div class="callout rv">
+  <div class="callout-label">If you remember one thing</div>
+  <p>TabICLv2 takes a table, reads it once, predicts. The "training data" lives in the context window, not the weights. The weights store the general skill of reading tabular context, a skill it learned from tens of millions of synthetic tables, none of which it ever saw twice.</p>
+</div>
+
+<!-- ══════════ §17 GLOSSED OVER ══════════ -->
+<h2 class="rv" id="glossed-over">What We Glossed Over</h2>
+
+<p class="rv">A few things were simplified to keep the diagrams readable. None of them change the picture above; they are the kind of details that turn into footnotes once you have the main idea.</p>
+
+<p class="rv">Every QKV walkthrough used a single attention head. The actual model uses 8 heads in both TF_col and TF_icl, with their outputs concatenated. The intuition is unchanged; you can think of each head as a separate "match on this kind of similarity, extract this kind of value" pattern, learned independently. The set of heads gives the layer multiple ways to look at the same row sequence at once.</p>
+
+<p class="rv">When we said TF_col is a Set Transformer, that is more than a label. The reason it is a Set Transformer rather than a vanilla one is the use of <em>inducing points</em>: a small fixed-size set of learnable queries that all input tokens attend to first, then the output is read back from the inducing points. This makes attention cost linear in the number of features instead of quadratic, which is why TabICLv2 stays fast even on tables with hundreds of columns.</p>
+
+<p class="rv">We described classification throughout. For regression, TabICLv2 swaps the classification head for one that predicts 999 quantiles, trained with pinball loss. The architecture above stays identical. This choice is unusual: most tabular foundation models either bin the target into a categorical or predict a single point estimate. TabICLv2's quantile head gives you a full predictive distribution essentially for free, including tail probabilities and confidence intervals.</p>
+
+<p class="rv">We also assumed at most 10 classes. TabICLv2 was pre-trained with up to 10, and for problems with more it uses a trick called <em>mixed-radix ensembling</em>. The class label gets decomposed into multiple "digits" in different bases (each at most 10), the model runs once per digit, and the per-digit predictions are recombined. It is its own small idea worth a separate post.</p>
+
+<p class="rv">Finally, the pretraining setup. Three stages, with dataset sizes growing from 1,024 rows in stage 1 to up to 60K rows in stage 3. The optimizer is Muon rather than the AdamW you might expect, which lets the model use much higher learning rates (8e-4 in stage 1, versus 1e-4 for AdamW in TabICL). Cautious weight decay is applied (decay only when the update and parameter agree in sign) so beneficial gradient directions are not interfered with. Total cost: about 24.5 H100-days, which is cheap by foundation-model standards.</p>
+
+<p class="rv">The synthetic prior is its own appendix. Eight types of random functions, multiple random graph topologies, sampling correlated scalars, dataset-level filtering. The prior turns out to be the single highest-impact ablation: training the v2 architecture on the v1 prior fails outright. Most of the engineering effort behind TabICLv2 lives in this generative process.</p>
+
+<p class="rv">For all of these, <a class="r" href="https://arxiv.org/abs/2602.11139" target="_blank" rel="noopener noreferrer">read the paper</a>. The architecture is in §3, pretraining in §4, the synthetic data engine in §5, ablations in §7, and the quantile-distribution math in Appendix I.</p>
+
+<!-- ══════════ REFERENCES ══════════ -->
+<section class="refs rv" id="references">
+<h2>References</h2>
+<ol>
+  <li>Qu, J., Holzmüller, D., Varoquaux, G., &amp; Le Morvan, M. (2026). TabICLv2: A better, faster, scalable, and open tabular foundation model. <a href="https://arxiv.org/abs/2602.11139" target="_blank" rel="noopener noreferrer">arXiv:2602.11139</a></li>
+  <li>Qu, J., Holzmüller, D., Varoquaux, G., &amp; Le Morvan, M. (2025). TabICL: A Tabular Foundation Model for In-Context Learning on Large Data. <em>ICML 2025</em>. <a href="https://arxiv.org/abs/2502.05564" target="_blank" rel="noopener noreferrer">arXiv:2502.05564</a></li>
+  <li>Hollmann, N. et al. (2025). Accurate predictions on small data with a tabular foundation model. <em>Nature</em>. (TabPFNv2)</li>
+  <li>Hollmann, N. et al. (2022). TabPFN: A Transformer That Solves Small Tabular Classification Problems in a Second. <a href="https://arxiv.org/abs/2207.01848" target="_blank" rel="noopener noreferrer">arXiv:2207.01848</a></li>
+  <li>Nakanishi, K. (2025). Scalable-Softmax Is Superior for Attention. <a href="https://arxiv.org/abs/2501.19399" target="_blank" rel="noopener noreferrer">arXiv:2501.19399</a></li>
+  <li>Lee, J. et al. (2019). Set Transformer. <em>ICML 2019</em>.</li>
+  <li>Vaswani, A. et al. (2017). Attention Is All You Need. <em>NeurIPS 2017</em>.</li>
+  <li>Alammar, J. (2018). The Illustrated Transformer. <a href="https://jalammar.github.io/illustrated-transformer/" target="_blank" rel="noopener noreferrer">jalammar.github.io</a></li>
+  <li>Erickson, N. et al. (2025). TabArena: A Living Benchmark for Tabular Machine Learning.</li>
+  <li>Ye, H.-J. et al. (2024). TALENT: A Tabular Analytics and Learning Toolbox.</li>
+</ol>
+</section>
+
+</div>
+</main>
+
+</body>
+</html>
